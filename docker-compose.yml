@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: campusflow-postgres
+    environment:
+      POSTGRES_DB: campusflow_erp
+      POSTGRES_USER: campusflow
+      POSTGRES_PASSWORD: campusflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - campusflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U campusflow -d campusflow_erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  campusflow_postgres_data:
