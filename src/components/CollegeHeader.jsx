@@ -33,49 +33,85 @@ export default function CollegeHeader({ variant = 'full', customSettings = null,
   if (variant === 'document') {
     return (
       <div className="college-header-document">
+        {/* Top accent bar */}
+        <div className="college-doc-accent-bar" />
+
         <div className="college-doc-row">
-          {s.collegeLogo ? (
-            <img src={s.collegeLogo} alt="Logo" className="college-logo-doc" />
-          ) : (
-            <div className="college-logo-placeholder-doc">{initials}</div>
-          )}
-          <div className="college-doc-center">
-            {s.affiliation && <div className="college-doc-univ">{s.affiliation}</div>}
-            <h2 className="college-doc-name">{s.institutionName || 'Institution Name'}</h2>
-            {s.autonomousStatus && <div className="college-doc-auto">({s.autonomousStatus})</div>}
-            {(title || subtitle) && (
-              <div className="college-doc-title-block">
-                {title && <div className="college-doc-title">{title}</div>}
-                {subtitle && <div className="college-doc-subtitle">{subtitle}</div>}
-              </div>
+          {/* Logo */}
+          <div className="college-doc-logo-wrap">
+            {s.collegeLogo ? (
+              <img src={s.collegeLogo} alt="Logo" className="college-logo-doc" />
+            ) : (
+              <div className="college-logo-placeholder-doc">{initials}</div>
             )}
-            {s.address && <div className="college-doc-addr">{s.address}</div>}
+          </div>
+
+          {/* Centre — main identity */}
+          <div className="college-doc-center">
+            {s.affiliation && (
+              <div className="college-doc-univ">{s.affiliation}</div>
+            )}
+            <h2 className="college-doc-name">{s.institutionName || 'Institution Name'}</h2>
+            {s.autonomousStatus && (
+              <div className="college-doc-auto">{s.autonomousStatus}</div>
+            )}
+            {s.motto && (
+              <div className="college-doc-motto">"{s.motto}"</div>
+            )}
+            {s.address && (
+              <div className="college-doc-addr">{s.address}</div>
+            )}
             <div className="college-doc-contacts">
-              {s.phone && <span>Phone: {s.phone}</span>}
-              {s.email && <span>Email: {s.email}</span>}
-              {s.website && <span>Web: {s.website}</span>}
+              {s.phone && <span>📞 {s.phone}</span>}
+              {s.email && <span>✉ {s.email}</span>}
+              {s.website && <span>🌐 {s.website}</span>}
             </div>
           </div>
+
+          {/* Right — accreditation badges */}
           <div className="college-doc-badges">
-            {s.naacGrade && <div className="college-badge-naac">NAAC<br /><strong>{s.naacGrade}</strong></div>}
-            {s.aisheCode && <div className="college-badge-aishe">AISHE: {s.aisheCode}</div>}
+            {s.naacGrade && (
+              <div className="college-badge-naac">
+                <span className="naac-label">NAAC</span>
+                <strong className="naac-grade">{s.naacGrade}</strong>
+                <span className="naac-sub">Accredited</span>
+              </div>
+            )}
+            {s.establishedYear && (
+              <div className="college-badge-est">Est. {s.establishedYear}</div>
+            )}
+            {s.aisheCode && (
+              <div className="college-badge-aishe">AISHE: {s.aisheCode}</div>
+            )}
           </div>
         </div>
+
+        {/* Document title block */}
+        {(title || subtitle) && (
+          <div className="college-doc-title-block">
+            {title && <div className="college-doc-title">{title}</div>}
+            {subtitle && <div className="college-doc-subtitle">{subtitle}</div>}
+          </div>
+        )}
+
+        {/* Meta row */}
         {meta.length > 0 && (
           <div className="college-doc-meta-row">
             {meta.map((item) => (
               <div key={item.label} className="college-doc-meta-item">
                 <span>{item.label}</span>
-                <strong>{item.value || '-'}</strong>
+                <strong>{item.value || '—'}</strong>
               </div>
             ))}
           </div>
         )}
+
         <div className="college-doc-divider" />
       </div>
     );
   }
 
+  // Default: "full" variant
   return (
     <div className="college-header-full">
       <div className="college-header-inner">
@@ -93,9 +129,9 @@ export default function CollegeHeader({ variant = 'full', customSettings = null,
           {s.motto && <div className="college-motto">"{s.motto}"</div>}
           {s.address && <div className="college-addr">{s.address}</div>}
           <div className="college-contact-row">
-            {s.phone && <span>Phone: {s.phone}</span>}
-            {s.email && <span>Email: {s.email}</span>}
-            {s.website && <span>Web: {s.website}</span>}
+            {s.phone && <span>Ph: {s.phone}</span>}
+            {s.email && <span>{s.email}</span>}
+            {s.website && <span>{s.website}</span>}
           </div>
           <div className="college-accreditation-row">
             {s.naacGrade && <span className="college-pill">NAAC: {s.naacGrade}</span>}

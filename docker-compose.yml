@@ -16,5 +16,19 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    build: .
+    container_name: campusflow-app
+    ports:
+      - "3000:80"
+    environment:
+      API_PORT: "4000"
+      CLIENT_ORIGIN: "*"
+      DATABASE_URL: postgres://campusflow:campusflow@postgres:5432/campusflow_erp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   campusflow_postgres_data:

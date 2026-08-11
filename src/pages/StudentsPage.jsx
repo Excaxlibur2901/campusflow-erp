@@ -1,9 +1,11 @@
 import { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { downloadOfficialFile } from '../utils/officialDownloads';
 import { Plus, Download, Trash2, Edit } from 'lucide-react';
 
 export default function StudentsPage() {
+  const { user } = useAuth();
   const { studentsList, addStudent, updateStudent, deleteStudent, departments, settings, showToast } = useData();
   const [search, setSearch] = useState('');
   const [sectionFilter, setSectionFilter] = useState('All');
@@ -24,7 +26,7 @@ export default function StudentsPage() {
 
   const openAdd = () => { setEditingStu(null); setForm({ name:'', rollNo:`CSE2024${String(studentsList.length+1).padStart(3,'0')}`, dept:'CSE', semester:3, section:'A' }); setShowModal(true); };
   const openEdit = (s) => { setEditingStu(s); setForm({ name:s.name, rollNo:s.rollNo, dept:s.dept, semester:s.semester, section:s.section }); setShowModal(true); };
-  const handleSave = () => { if(!form.name.trim()||!form.rollNo.trim()) return; if(editingStu) updateStudent(editingStu.id, form); else addStudent(form); setShowModal(false); };
+  const handleSave = () => { if(!form.name.trim()||!form.rollNo.trim()) return; if(editingStu) updateStudent(editingStu.id, form, user?.email); else addStudent(form, user?.email); setShowModal(false); };
 
   const exportStudents = async (format) => {
     try {

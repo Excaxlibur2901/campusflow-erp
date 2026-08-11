@@ -638,12 +638,12 @@ export default function DocumentsPage() {
       {/* Stats Bar */}
       <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 24 }}>
         {[
-          { icon: FileText, label: 'Total Documents', value: documents.length, bg: 'linear-gradient(135deg, var(--primary), var(--accent))' },
-          { icon: Sparkles, label: 'Generated Today', value: generatedToday, bg: 'linear-gradient(135deg, #16A34A, #4ade80)' },
-          { icon: LayoutGrid, label: 'Document Types', value: uniqueTypes, bg: 'linear-gradient(135deg, #D97706, #fbbf24)' },
+          { icon: FileText, label: 'Total Documents', value: documents.length },
+          { icon: Sparkles, label: 'Generated Today', value: generatedToday },
+          { icon: LayoutGrid, label: 'Document Types', value: uniqueTypes },
         ].map((s, i) => (
           <div key={i} className="stat-card">
-            <div className="stat-icon" style={{ background: s.bg }}><s.icon size={24} color="#fff" /></div>
+            <div className="stat-icon" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}><s.icon size={22} color="var(--primary)" /></div>
             <div className="stat-value">{s.value}</div>
             <div className="stat-label">{s.label}</div>
           </div>
@@ -657,13 +657,13 @@ export default function DocumentsPage() {
       <div className="doc-template-grid">
         {TEMPLATES.map((tpl) => (
           <div key={tpl.id} className="doc-template-card" onClick={() => openWizard(tpl.id)}>
-            <div className="doc-template-icon" style={{ background: `linear-gradient(135deg, ${tpl.gradient[0]}, ${tpl.gradient[1]})` }}>
-              <tpl.icon size={24} color="#fff" />
+            <div className="doc-template-icon" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <tpl.icon size={20} color="var(--primary)" />
             </div>
             <div className="doc-template-name">{tpl.name}</div>
             <div className="doc-template-desc">{tpl.desc}</div>
-            <button className="btn btn-primary btn-sm doc-template-btn" onClick={(e) => { e.stopPropagation(); openWizard(tpl.id); }}>
-              <Sparkles size={14} /> Generate
+            <button className="btn btn-outline btn-sm doc-template-btn" onClick={(e) => { e.stopPropagation(); openWizard(tpl.id); }}>
+              <Plus size={14} /> Generate
             </button>
           </div>
         ))}

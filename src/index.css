@@ -867,67 +867,511 @@ tr:last-child td { border-bottom: none; }
 .college-compact-name { font-size: 13px; font-weight: 800; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .college-compact-aff { font-size: 9px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* College Header — Document Variant */
-.college-header-document { width: 100%; color: #111827; }
-.college-doc-row { display: flex; gap: 18px; align-items: center; }
-.college-logo-doc { width: 74px; height: 74px; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
-.college-logo-placeholder-doc {
-  width: 74px; height: 74px; border-radius: 6px; flex-shrink: 0;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 900; font-size: 20px; color: #fff;
+/* ============================================================ */
+/* College Header — Document Variant (Real Official Look)       */
+/* ============================================================ */
+.college-header-document {
+  width: 100%;
+  color: #111827;
+  font-family: 'Times New Roman', Times, serif;
+  background: #fff;
 }
-.college-doc-center { flex: 1; text-align: center; }
-.college-doc-univ { font-size: 12px; font-weight: 700; color: #374151; letter-spacing: 0.2px; }
-.college-doc-name { font-size: 23px; font-weight: 900; color: var(--primary); margin: 2px 0; line-height: 1.15; }
-.college-doc-auto { font-size: 12px; color: var(--accent); font-weight: 800; }
+
+/* Top tricolor accent bar — saffron / white / green */
+.college-doc-accent-bar {
+  height: 6px;
+  background: linear-gradient(to right, #FF9933 33.33%, #e5e7eb 33.33% 66.66%, #138808 66.66%);
+  border-radius: 2px 2px 0 0;
+  margin-bottom: 10px;
+}
+
+.college-doc-row {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  padding: 4px 8px 8px;
+}
+
+/* Logo area */
+.college-doc-logo-wrap {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.college-logo-doc {
+  width: 86px;
+  height: 86px;
+  object-fit: contain;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+  padding: 3px;
+  background: #fff;
+}
+.college-logo-placeholder-doc {
+  width: 86px; height: 86px; border-radius: 6px; flex-shrink: 0;
+  background: linear-gradient(135deg, #1B3A6B, #2E75B6);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 900; font-size: 26px; color: #fff;
+  font-family: Arial, sans-serif;
+  letter-spacing: -1px;
+}
+
+/* Centre column */
+.college-doc-center {
+  flex: 1;
+  text-align: center;
+  padding: 0 8px;
+}
+.college-doc-univ {
+  font-size: 11px;
+  font-weight: 700;
+  color: #374151;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  line-height: 1.4;
+  font-family: Arial, sans-serif;
+}
+.college-doc-name {
+  font-size: 22px;
+  font-weight: 900;
+  color: #1B3A6B;
+  margin: 4px 0 2px;
+  line-height: 1.2;
+  letter-spacing: 0.2px;
+  font-family: 'Times New Roman', Times, serif;
+}
+.college-doc-auto {
+  font-size: 11px;
+  color: #374151;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin-bottom: 2px;
+  font-family: Arial, sans-serif;
+}
+.college-doc-motto {
+  font-size: 10px;
+  font-style: italic;
+  color: #6b7280;
+  margin: 2px 0 4px;
+  font-family: Georgia, serif;
+}
+.college-doc-addr {
+  font-size: 10px;
+  color: #374151;
+  margin-top: 3px;
+  line-height: 1.5;
+  font-family: Arial, sans-serif;
+}
+.college-doc-contacts {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  font-size: 9.5px;
+  color: #4b5563;
+  margin-top: 4px;
+  flex-wrap: wrap;
+  font-family: Arial, sans-serif;
+}
+
+/* Right badges column */
+.college-doc-badges {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+  align-items: center;
+  min-width: 72px;
+}
+
+/* NAAC badge — styled like the real thing */
+.college-badge-naac {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0;
+  border: 2px solid #1B3A6B;
+  border-radius: 4px;
+  overflow: hidden;
+  text-align: center;
+  min-width: 66px;
+  line-height: 1.2;
+}
+.naac-label {
+  display: block;
+  width: 100%;
+  font-size: 8px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-family: Arial, sans-serif;
+  background: #1B3A6B;
+  padding: 3px 4px;
+}
+.naac-grade {
+  display: block;
+  font-size: 24px;
+  font-weight: 900;
+  color: #1B3A6B;
+  font-family: 'Times New Roman', Times, serif;
+  padding: 2px 4px;
+}
+.naac-sub {
+  display: block;
+  font-size: 7px;
+  color: #374151;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  font-family: Arial, sans-serif;
+  padding: 2px 4px 4px;
+  border-top: 1px solid #e5e7eb;
+  width: 100%;
+}
+
+.college-badge-est {
+  font-size: 9px;
+  font-weight: 700;
+  color: #374151;
+  text-align: center;
+  border: 1px solid #d1d5db;
+  border-radius: 3px;
+  padding: 3px 8px;
+  width: 100%;
+  font-family: Arial, sans-serif;
+}
+.college-badge-aishe {
+  font-size: 8px;
+  font-weight: 700;
+  color: #4b5563;
+  text-align: center;
+  border: 1px solid #e5e7eb;
+  border-radius: 3px;
+  padding: 2px 6px;
+  width: 100%;
+  font-family: Arial, sans-serif;
+}
+
+/* Document title block (box around document type) */
 .college-doc-title-block {
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  margin-top: 8px;
-  padding: 5px 18px;
-  border: 1px solid #1f2937;
-  border-radius: 3px;
-  background: #f8fafc;
+  margin: 10px auto 0;
+  padding: 6px 32px;
+  border: 1.5px solid #1B3A6B;
+  border-radius: 2px;
+  background: #eff6ff;
+  width: fit-content;
 }
-.college-doc-title { font-size: 14px; font-weight: 900; text-transform: uppercase; color: #111827; letter-spacing: 0.4px; }
-.college-doc-subtitle { font-size: 11px; font-weight: 800; color: var(--text-muted); }
-.college-doc-addr { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.college-doc-contacts { display: flex; gap: 14px; justify-content: center; font-size: 10px; color: var(--text-muted); margin-top: 4px; flex-wrap: wrap; }
-.college-doc-badges { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; align-items: center; }
-.college-badge-naac {
-  width: 48px; height: 48px; border-radius: 50%; font-size: 10px;
-  background: linear-gradient(135deg, #D97706, #fbbf24); color: #fff;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  text-align: center; line-height: 1.2;
+.college-doc-title {
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+  color: #1B3A6B;
+  letter-spacing: 1px;
+  font-family: Arial, sans-serif;
 }
-.college-badge-naac strong { font-size: 14px; }
-.college-badge-aishe { font-size: 8px; font-weight: 700; color: var(--text-muted); text-align: center; }
+.college-doc-subtitle {
+  font-size: 10px;
+  font-weight: 600;
+  color: #374151;
+  font-family: Arial, sans-serif;
+}
+
+/* Meta info row — bordered table below header */
 .college-doc-meta-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  border: 1px solid #1f2937;
+  border: 1.5px solid #1B3A6B;
   border-bottom: none;
-  margin-top: 14px;
+  margin-top: 12px;
 }
 .college-doc-meta-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 34px;
-  padding: 6px 10px;
-  border-right: 1px solid #1f2937;
-  font-size: 12px;
+  min-height: 32px;
+  padding: 5px 10px;
+  border-right: 1.5px solid #1B3A6B;
+  font-size: 11px;
 }
 .college-doc-meta-item:last-child { border-right: none; }
-.college-doc-meta-item span { color: var(--text-muted); font-weight: 800; text-transform: uppercase; font-size: 10px; }
-.college-doc-meta-item strong { color: #111827; font-weight: 900; text-align: right; }
+.college-doc-meta-item span { color: #374151; font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: 0.3px; font-family: Arial, sans-serif; }
+.college-doc-meta-item strong { color: #111827; font-weight: 800; text-align: right; font-family: Arial, sans-serif; font-size: 11px; }
+
+/* Bottom double-line divider — classic official document look */
 .college-doc-divider {
-  height: 3px; margin-top: 12px;
-  background: var(--primary);
-  border-radius: 0 0 2px 2px;
+  margin-top: 10px;
+  border-top: 3px solid #1B3A6B;
+  border-bottom: 1px solid #1B3A6B;
+  padding-bottom: 2px;
 }
 .college-doc-meta-row + .college-doc-divider { margin-top: 0; }
+
+/* ================================================================== */
+/*  DOCUMENTS MODULE — Minimal Official Template                       */
+/* ================================================================== */
+
+/* Template Gallery */
+.doc-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+.doc-template-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  padding: 20px;
+  cursor: pointer;
+  transition: all var(--transition);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.doc-template-card:hover {
+  box-shadow: var(--shadow-md);
+  border-left-color: var(--accent);
+}
+.doc-template-icon {
+  width: 40px; height: 40px;
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.doc-template-name {
+  font-size: 15px; font-weight: 700;
+  color: var(--text-primary);
+}
+.doc-template-desc {
+  font-size: 12px; color: var(--text-muted);
+  line-height: 1.5;
+}
+.doc-template-btn {
+  margin-top: auto;
+  align-self: flex-start;
+}
+
+/* Wizard Steps */
+.doc-wizard-steps {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 20px;
+}
+.doc-wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: color var(--transition);
+}
+.doc-wizard-step.active {
+  color: var(--primary);
+}
+.doc-wizard-step-num {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+  color: var(--text-muted);
+  background: #fff;
+  transition: all var(--transition);
+}
+.doc-wizard-step.active .doc-wizard-step-num {
+  border-color: var(--primary);
+  color: #fff;
+  background: var(--primary);
+}
+.doc-wizard-divider {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  margin: 0 16px;
+}
+
+/* Document Preview Paper */
+.doc-preview-paper {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 32px 28px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.doc-preview-border {
+  position: absolute;
+  inset: 0;
+  border: none;
+  pointer-events: none;
+}
+.doc-preview-watermark {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  font-size: 32px;
+  font-weight: 800;
+  color: rgba(0, 0, 0, 0.03);
+  white-space: nowrap;
+  pointer-events: none;
+  letter-spacing: 6px;
+  user-select: none;
+}
+
+/* Preview Content */
+.doc-preview-title {
+  font-size: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--primary);
+  text-align: center;
+  margin: 16px 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.doc-preview-details {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 4px 12px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  padding: 12px 0;
+}
+.doc-preview-details dt {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 4px 0;
+}
+.doc-preview-details dd {
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 4px 0;
+  font-size: 13px;
+}
+.doc-preview-section {
+  margin-top: 12px;
+}
+.doc-preview-section h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.doc-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 6px;
+}
+.doc-preview-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--text-muted);
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  position: static;
+}
+.doc-preview-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 13px;
+}
+.doc-preview-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* Signatures */
+.doc-preview-signatures {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 36px;
+  padding-top: 20px;
+}
+.doc-preview-sig {
+  text-align: center;
+  min-width: 120px;
+}
+.doc-preview-sig-line {
+  width: 120px;
+  height: 1px;
+  background: #6b7280;
+  margin: 0 auto 6px;
+}
+.doc-preview-sig-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.doc-preview-sig-role {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* Fee Row Editing */
+.doc-fee-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.doc-fee-row .form-input {
+  flex: 1;
+}
+.doc-fee-row .fee-amount {
+  width: 120px;
+  flex: none;
+}
+.doc-fee-total {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--primary);
+}
+
+/* Empty State */
+.doc-empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-muted);
+}
+.doc-empty-state svg {
+  margin-bottom: 12px;
+  opacity: 0.25;
+}
+.doc-empty-state h3 {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+.doc-empty-state p {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+

@@ -1,40 +1,75 @@
+import { useMemo } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { downloadOfficialFile } from '../utils/officialDownloads';
-import { BarChart3, TrendingUp, Download } from 'lucide-react';
+import { BarChart3, TrendingUp, Download, Inbox } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, LineChart, Line, Legend, RadarChart,
-  PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar
+  PieChart, Pie, Cell, LineChart, Line, Legend
 } from 'recharts';
 
 const COLORS = ['#2E75B6','#1B3A6B','#16A34A','#D97706','#DC2626','#8b5cf6'];
 
+function EmptyChart({ message }) {
+  return (
+    <div style={{ height: 280, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: 8 }}>
+      <Inbox size={36} strokeWidth={1.5} />
+      <p style={{ fontSize: 13 }}>{message}</p>
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
+  const { user } = useAuth();
   const { departments, facultyList, studentsList, examsList, attendanceHistory, settings, showToast } = useData();
 
-  const deptPerformance = departments.map(d => ({
-    name: d.code, students: d.students, faculty: d.faculty,
-    ratio: d.faculty > 0 ? Math.round(d.students / d.faculty) : 0,
-  }));
+  // Real department performance from actual data
+  const deptPerformance = useMemo(() => departments.map(d => {
+    const deptStudents = studentsList.filter(s => s.dept === d.code || s.department === d.name);
+    const deptFaculty = facultyList.filter(f => f.department === d.name);
+    return {
+      name: d.code,
+      fullName: d.name,
+      students: deptStudents.length,
+      faculty: deptFaculty.length,
+      ratio: deptFaculty.length > 0 ? Math.round(deptStudents.length / deptFaculty.length) : 0,
+      avgAttendance: deptStudents.length > 0
+        ? Math.round(deptStudents.reduce((a, s) => a + (s.attendance || 0), 0) / deptStudents.length)
+        : 0,
+    };
+  }), [departments, studentsList, facultyList]);
 
-  const monthlyTrend = [
-    { month: 'Jul', students: studentsList.length - 300, attendance: 88 },
-    { month: 'Aug', students: studentsList.length - 200, attendance: 85 },
-    { month: 'Sep', students: studentsList.length - 100, attendance: 82 },
-    { month: 'Oct', students: studentsList.length, attendance: 84 },
-  ];
+  // Attendance trend from real history — group by month
+  const monthlyTrend = useMemo(() => {
+    if (attendanceHistory.length === 0) return [];
+    const byMonth = {};
+    attendanceHistory.forEach(h => {
+      if (!h.date) return;
+      const month = h.date.substring(0, 7); // YYYY-MM
+      if (!byMonth[month]) byMonth[month] = { totalStudents: 0, totalPresent: 0 };
+      byMonth[month].totalStudents += h.total || 0;
+      byMonth[month].totalPresent += h.present || 0;
+    });
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([month, data]) => ({
+        month: new Date(month + '-01').toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }),
+        sessions: attendanceHistory.filter(h => h.date?.startsWith(month)).length,
+        attendance: data.totalStudents > 0 ? Math.round((data.totalPresent / data.totalStudents) * 100) : 0,
+      }));
+  }, [attendanceHistory]);
 
-  const radarData = [
-    { metric: 'Attendance', CSE: 87, ECE: 82, ME: 78 },
-    { metric: 'Pass Rate', CSE: 92, ECE: 88, ME: 85 },
-    { metric: 'Faculty Load', CSE: 85, ECE: 78, ME: 72 },
-    { metric: 'Room Usage', CSE: 90, ECE: 80, ME: 75 },
-    { metric: 'Satisfaction', CSE: 88, ECE: 84, ME: 80 },
-  ];
-
+  // Student attendance distribution
   const regularStudents = studentsList.filter(s => s.attendance >= 75).length;
   const defaulterStudents = studentsList.filter(s => s.attendance < 75).length;
-  const avgAttendance = studentsList.length > 0 ? Math.round(studentsList.reduce((a, s) => a + s.attendance, 0) / studentsList.length) : 0;
+  const avgAttendance = studentsList.length > 0 ? Math.round(studentsList.reduce((a, s) => a + (s.attendance || 0), 0) / studentsList.length) : 0;
+
+  // Attendance status pie chart
+  const attendancePie = studentsList.length > 0 ? [
+    { name: 'Regular (≥75%)', value: regularStudents },
+    { name: 'Defaulter (<75%)', value: defaulterStudents },
+  ].filter(d => d.value > 0) : [];
 
   const handleExport = async (format) => {
     try {
@@ -52,8 +87,8 @@ export default function AnalyticsPage() {
           { label: 'Attendance Submissions', value: attendanceHistory.length },
           { label: 'Total Exams', value: examsList.length },
         ],
-        columns: ['Department', 'Students', 'Faculty', 'Student-Faculty Ratio'],
-        rows: deptPerformance.map((d) => [d.name, d.students, d.faculty, `${d.ratio}:1`]),
+        columns: ['Department', 'Students', 'Faculty', 'Student-Faculty Ratio', 'Avg Attendance'],
+        rows: deptPerformance.map((d) => [d.name, d.students, d.faculty, `${d.ratio}:1`, `${d.avgAttendance}%`]),
         filename: 'analytics_report',
       });
       showToast(`Analytics report exported as ${format.toUpperCase()}`);
@@ -74,7 +109,7 @@ export default function AnalyticsPage() {
 
       <div className="stats-grid" style={{ marginBottom: 24 }}>
         <div className="stat-card"><div className="stat-value">{studentsList.length}</div><div className="stat-label">Total Students</div></div>
-        <div className="stat-card"><div className="stat-value" style={{color:'var(--success)'}}>{avgAttendance}%</div><div className="stat-label">Avg Attendance</div></div>
+        <div className="stat-card"><div className="stat-value" style={{color:'var(--success)'}}>{avgAttendance > 0 ? `${avgAttendance}%` : '—'}</div><div className="stat-label">Avg Attendance</div></div>
         <div className="stat-card"><div className="stat-value" style={{color:'var(--accent)'}}>{regularStudents}</div><div className="stat-label">Regular Students</div></div>
         <div className="stat-card"><div className="stat-value" style={{color:'var(--error)'}}>{defaulterStudents}</div><div className="stat-label">Defaulters</div></div>
       </div>
@@ -82,51 +117,65 @@ export default function AnalyticsPage() {
       <div className="charts-grid">
         <div className="chart-card">
           <div className="chart-title"><BarChart3 size={18} color="var(--accent)"/>Student-to-Faculty Ratio by Department</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={deptPerformance}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
-              <XAxis dataKey="name" tick={{fontSize:12}}/><YAxis tick={{fontSize:12}}/><Tooltip/>
-              <Bar dataKey="ratio" fill="var(--accent)" radius={[6,6,0,0]}/>
-            </BarChart>
-          </ResponsiveContainer>
+          {deptPerformance.length > 0 && deptPerformance.some(d => d.students > 0) ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={deptPerformance}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                <XAxis dataKey="name" tick={{fontSize:12}}/>
+                <YAxis tick={{fontSize:12}}/>
+                <Tooltip formatter={(v, name) => [name === 'ratio' ? `${v}:1` : v, name === 'ratio' ? 'S:F Ratio' : 'Students']}/>
+                <Legend />
+                <Bar dataKey="students" name="Students" fill="var(--accent)" radius={[4,4,0,0]}/>
+                <Bar dataKey="ratio" name="S:F Ratio" fill="#8b5cf6" radius={[4,4,0,0]}/>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Add departments, faculty, and students to see this chart" />}
         </div>
         <div className="chart-card">
-          <div className="chart-title"><TrendingUp size={18} color="var(--accent)"/>Monthly Enrollment & Attendance</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={monthlyTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
-              <XAxis dataKey="month" tick={{fontSize:12}}/>
-              <YAxis yAxisId="left" tick={{fontSize:12}}/><YAxis yAxisId="right" orientation="right" tick={{fontSize:12}} domain={[0,100]}/>
-              <Tooltip/><Legend/>
-              <Line yAxisId="left" type="monotone" dataKey="students" stroke="var(--accent)" strokeWidth={2}/>
-              <Line yAxisId="right" type="monotone" dataKey="attendance" stroke="var(--success)" strokeWidth={2}/>
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="chart-title"><TrendingUp size={18} color="var(--accent)"/>Monthly Attendance Trend</div>
+          {monthlyTrend.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={monthlyTrend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                <XAxis dataKey="month" tick={{fontSize:12}}/>
+                <YAxis yAxisId="left" tick={{fontSize:12}}/>
+                <YAxis yAxisId="right" orientation="right" tick={{fontSize:12}} domain={[0,100]} unit="%"/>
+                <Tooltip/>
+                <Legend/>
+                <Line yAxisId="left" type="monotone" dataKey="sessions" name="Sessions" stroke="var(--accent)" strokeWidth={2} dot={{ r: 4 }}/>
+                <Line yAxisId="right" type="monotone" dataKey="attendance" name="Attendance %" stroke="var(--success)" strokeWidth={2} dot={{ r: 4 }}/>
+              </LineChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Submit attendance records to see monthly trends" />}
         </div>
       </div>
       <div className="charts-grid">
         <div className="chart-card">
-          <div className="chart-title">Department Comparison Radar</div>
-          <ResponsiveContainer width="100%" height={300}>
-            <RadarChart data={radarData}>
-              <PolarGrid stroke="var(--border)"/><PolarAngleAxis dataKey="metric" tick={{fontSize:11}}/><PolarRadiusAxis angle={30} domain={[0,100]} tick={{fontSize:10}}/>
-              <Radar name="CSE" dataKey="CSE" stroke="#2E75B6" fill="#2E75B6" fillOpacity={0.2}/>
-              <Radar name="ECE" dataKey="ECE" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.2}/>
-              <Radar name="ME" dataKey="ME" stroke="#16A34A" fill="#16A34A" fillOpacity={0.2}/>
-              <Legend/>
-            </RadarChart>
-          </ResponsiveContainer>
+          <div className="chart-title">Department Average Attendance (%)</div>
+          {deptPerformance.length > 0 && deptPerformance.some(d => d.avgAttendance > 0) ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={deptPerformance} layout="vertical">
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)"/>
+                <XAxis type="number" domain={[0, 100]} tick={{fontSize:12}} unit="%"/>
+                <YAxis dataKey="name" type="category" tick={{fontSize:12}} width={50}/>
+                <Tooltip formatter={(v) => [`${v}%`, 'Avg Attendance']}/>
+                <Bar dataKey="avgAttendance" name="Avg Attendance" fill="#16A34A" radius={[0,4,4,0]}/>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Mark attendance to see department comparison" />}
         </div>
         <div className="chart-card">
-          <div className="chart-title">Student Distribution by Department</div>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie data={departments.map(d=>({name:d.code,value:d.students}))} cx="50%" cy="50%" outerRadius={110} dataKey="value" label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}>
-                {departments.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
-              </Pie>
-              <Tooltip/>
-            </PieChart>
-          </ResponsiveContainer>
+          <div className="chart-title">Student Attendance Status</div>
+          {attendancePie.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie data={attendancePie} cx="50%" cy="50%" outerRadius={110} dataKey="value" label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`}>
+                  {attendancePie.map((_,i)=><Cell key={i} fill={i === 0 ? '#16A34A' : '#DC2626'}/>)}
+                </Pie>
+                <Tooltip/>
+              </PieChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Add students to see attendance status breakdown" />}
         </div>
       </div>
     </div>

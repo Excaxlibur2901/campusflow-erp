@@ -1,9 +1,10 @@
+import { useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import {
   Users, GraduationCap, BookOpen, Building, Calendar, ClipboardList,
   UserCheck, Clock, TrendingUp, TrendingDown,
-  FileText, BarChart3, Activity
+  FileText, BarChart3, Activity, Inbox
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -30,32 +31,66 @@ function StatCard({ icon: Icon, iconBg, value, label, trend, trendDir }) {
   );
 }
 
+function EmptyChart({ message }) {
+  return (
+    <div style={{ height: 260, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: 8 }}>
+      <Inbox size={36} strokeWidth={1.5} />
+      <p style={{ fontSize: 13 }}>{message}</p>
+    </div>
+  );
+}
+
 function AdminDashboard() {
-  const { departments, facultyList, studentsList, examsList, notificationsList, classroomsList } = useData();
+  const { departments, facultyList, studentsList, examsList, notificationsList, classroomsList, attendanceHistory } = useData();
 
-  const attendanceData = departments.map(d => ({
-    name: d.code,
-    attendance: Math.floor(Math.random() * 15 + 75),
-  }));
+  // Real department-wise average attendance from studentsList
+  const attendanceData = useMemo(() => departments.map(d => {
+    const deptStudents = studentsList.filter(s => s.dept === d.code || s.department === d.name);
+    const avg = deptStudents.length > 0
+      ? Math.round(deptStudents.reduce((a, s) => a + (s.attendance || 0), 0) / deptStudents.length)
+      : 0;
+    return { name: d.code, attendance: avg };
+  }), [departments, studentsList]);
 
-  const workloadData = [
-    { week: 'W1', CSE: 18, ECE: 16, ME: 15 }, { week: 'W2', CSE: 20, ECE: 17, ME: 16 },
-    { week: 'W3', CSE: 19, ECE: 18, ME: 17 }, { week: 'W4', CSE: 21, ECE: 16, ME: 18 },
-  ];
+  // Real classroom utilization by type
+  const classroomTypes = useMemo(() => {
+    if (classroomsList.length === 0) return [];
+    const counts = {};
+    classroomsList.forEach(r => { counts[r.type || 'Other'] = (counts[r.type || 'Other'] || 0) + 1; });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [classroomsList]);
 
-  const occupied = classroomsList.filter(r => r.type === 'lab').length;
-  const free = classroomsList.filter(r => r.type === 'lecture').length;
-  const roomUtil = [
-    { name: 'Occupied', value: Math.round((occupied / classroomsList.length) * 100) || 68 },
-    { name: 'Free', value: Math.round((free / classroomsList.length) * 100) || 24 },
-    { name: 'Maintenance', value: 8 },
-  ];
+  // Real weekly attendance trend from history (last 7 records grouped by day name)
+  const weeklyTrend = useMemo(() => {
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    if (attendanceHistory.length === 0) return [];
+    return days.map(day => {
+      const dayRecords = attendanceHistory.filter(h => {
+        const d = new Date(h.date);
+        const dayMap = { 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' };
+        return dayMap[d.getDay()] === day;
+      });
+      const totalStudents = dayRecords.reduce((a, r) => a + (r.total || 0), 0);
+      const totalPresent = dayRecords.reduce((a, r) => a + (r.present || 0), 0);
+      return {
+        day,
+        present: totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : 0,
+        absent: totalStudents > 0 ? Math.round(((totalStudents - totalPresent) / totalStudents) * 100) : 0,
+      };
+    }).filter(d => d.present > 0 || d.absent > 0);
+  }, [attendanceHistory]);
 
-  const weeklyTrend = [
-    { day: 'Mon', present: 92, absent: 8 }, { day: 'Tue', present: 88, absent: 12 },
-    { day: 'Wed', present: 90, absent: 10 }, { day: 'Thu', present: 85, absent: 15 },
-    { day: 'Fri', present: 82, absent: 18 }, { day: 'Sat', present: 75, absent: 25 },
-  ];
+  // Faculty workload grouped by department
+  const workloadData = useMemo(() => departments.map(d => {
+    const deptFaculty = facultyList.filter(f => f.department === d.name);
+    const avgLoad = deptFaculty.length > 0
+      ? Math.round(deptFaculty.reduce((a, f) => a + (f.currentHours || 0), 0) / deptFaculty.length)
+      : 0;
+    const avgMax = deptFaculty.length > 0
+      ? Math.round(deptFaculty.reduce((a, f) => a + (f.maxHours || 0), 0) / deptFaculty.length)
+      : 0;
+    return { dept: d.code, currentHours: avgLoad, maxHours: avgMax };
+  }), [departments, facultyList]);
 
   return (
     <>
@@ -63,62 +98,69 @@ function AdminDashboard() {
         <StatCard icon={Building} iconBg="linear-gradient(135deg, #1B3A6B, #2E75B6)" value={departments.length} label="Active Departments" trend={`${departments.length} total`} trendDir="up" />
         <StatCard icon={GraduationCap} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={facultyList.length} label="Total Faculty" trend={`${facultyList.filter(f => f.currentHours < f.maxHours).length} available`} trendDir="up" />
         <StatCard icon={Users} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={studentsList.length.toLocaleString()} label="Total Students" trend={`${studentsList.filter(s => s.attendance >= 75).length} regular`} trendDir="up" />
-        <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={examsList.length} label="Exam Events" trend={`${examsList.filter(e => e.status === 'upcoming').length} upcoming`} trendDir="up" />
+        <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={examsList.length} label="Exam Events" trend={`${examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming').length} upcoming`} trendDir="up" />
       </div>
       <div className="charts-grid">
         <div className="chart-card">
-          <div className="chart-title"><BarChart3 size={18} color="var(--accent)" />Department-wise Attendance (%)</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={attendanceData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} domain={[0, 100]} />
-              <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid var(--border)' }} />
-              <Bar dataKey="attendance" fill="var(--accent)" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <div className="chart-title"><BarChart3 size={18} color="var(--accent)" />Department-wise Average Attendance (%)</div>
+          {attendanceData.length > 0 && attendanceData.some(d => d.attendance > 0) ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={attendanceData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} domain={[0, 100]} />
+                <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid var(--border)' }} formatter={(v) => [`${v}%`, 'Attendance']} />
+                <Bar dataKey="attendance" fill="var(--accent)" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Mark attendance to see department-wise statistics" />}
         </div>
         <div className="chart-card">
-          <div className="chart-title"><Activity size={18} color="var(--accent)" />Classroom Utilization</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie data={roomUtil} cx="50%" cy="50%" innerRadius={70} outerRadius={110} dataKey="value" paddingAngle={3}>
-                {roomUtil.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
-              </Pie>
-              <Tooltip />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
+          <div className="chart-title"><Activity size={18} color="var(--accent)" />Classroom Utilization by Type</div>
+          {classroomTypes.length > 0 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie data={classroomTypes} cx="50%" cy="50%" innerRadius={70} outerRadius={110} dataKey="value" paddingAngle={3} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                  {classroomTypes.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Add classrooms to see utilization breakdown" />}
         </div>
       </div>
       <div className="charts-grid">
         <div className="chart-card">
-          <div className="chart-title"><TrendingUp size={18} color="var(--accent)" />Faculty Workload Trend (hours/week)</div>
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={workloadData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="week" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="CSE" stroke="#2E75B6" strokeWidth={2} dot={{ r: 4 }} />
-              <Line type="monotone" dataKey="ECE" stroke="#8b5cf6" strokeWidth={2} dot={{ r: 4 }} />
-              <Line type="monotone" dataKey="ME" stroke="#16A34A" strokeWidth={2} dot={{ r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="chart-title"><TrendingUp size={18} color="var(--accent)" />Faculty Workload by Department (Avg Hours)</div>
+          {workloadData.length > 0 && workloadData.some(d => d.currentHours > 0 || d.maxHours > 0) ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={workloadData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="dept" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="currentHours" name="Current Hours" fill="#2E75B6" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="maxHours" name="Max Hours" fill="rgba(46,117,182,0.25)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Add faculty with workload hours to see this chart" />}
         </div>
         <div className="chart-card">
           <div className="chart-title"><UserCheck size={18} color="var(--accent)" />Weekly Attendance Trend</div>
-          <ResponsiveContainer width="100%" height={260}>
-            <AreaChart data={weeklyTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip />
-              <Area type="monotone" dataKey="present" stackId="1" stroke="#16A34A" fill="#dcfce7" />
-              <Area type="monotone" dataKey="absent" stackId="1" stroke="#DC2626" fill="#fee2e2" />
-            </AreaChart>
-          </ResponsiveContainer>
+          {weeklyTrend.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={weeklyTrend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis dataKey="day" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} unit="%" />
+                <Tooltip formatter={(v) => [`${v}%`]} />
+                <Area type="monotone" dataKey="present" name="Present %" stackId="1" stroke="#16A34A" fill="#dcfce7" />
+                <Area type="monotone" dataKey="absent" name="Absent %" stackId="1" stroke="#DC2626" fill="#fee2e2" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : <EmptyChart message="Submit attendance records to see weekly trends" />}
         </div>
       </div>
       <div className="table-container">
@@ -137,6 +179,9 @@ function AdminDashboard() {
                 <td>{n.read ? <span className="badge badge-neutral">Read</span> : <span className="badge badge-success">New</span>}</td>
               </tr>
             ))}
+            {notificationsList.length === 0 && (
+              <tr><td colSpan="4" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No activity yet</td></tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -145,84 +190,115 @@ function AdminDashboard() {
 }
 
 function FacultyDashboard() {
-  const todayLectures = [
-    { time: '9:00 - 9:50', subject: 'Data Structures', room: 'LH-101', section: 'A', type: 'theory' },
-    { time: '11:00 - 11:50', subject: 'DSA Lab', room: 'LAB-CSE-1', section: 'A', type: 'lab' },
-    { time: '2:30 - 3:20', subject: 'Data Structures', room: 'LH-201', section: 'B', type: 'theory' },
-  ];
+  const { user } = useAuth();
+  const { timetableSlots, subjectsList, attendanceHistory } = useData();
+
+  // Get today's day name
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const todayDay = dayNames[new Date().getDay()];
+
+  // Real today's schedule from timetable
+  const todayLectures = useMemo(() =>
+    timetableSlots.filter(slot =>
+      slot.day === todayDay &&
+      (slot.faculty === user?.name || slot.facultyId === user?.email)
+    ),
+    [timetableSlots, todayDay, user]
+  );
+
+  // Real pending attendance count
+  const submittedKeys = new Set(attendanceHistory.map(h => `${h.subject}_${h.date}`));
+  const pendingCount = todayLectures.filter(l => !submittedKeys.has(`${l.subject}_${new Date().toISOString().split('T')[0]}`)).length;
+
   return (
     <>
       <div className="stats-grid">
         <StatCard icon={Calendar} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={todayLectures.length} label="Today's Lectures" />
-        <StatCard icon={Clock} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value="18/22" label="Weekly Hours Used" />
-        <StatCard icon={UserCheck} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value="2" label="Attendance Pending" />
-        <StatCard icon={FileText} iconBg="linear-gradient(135deg, #8b5cf6, #a78bfa)" value="1" label="Marks Entry Pending" />
+        <StatCard icon={UserCheck} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={pendingCount} label="Attendance Pending" />
+        <StatCard icon={BookOpen} iconBg="linear-gradient(135deg, #8b5cf6, #a78bfa)" value={subjectsList.length} label="Subjects" />
+        <StatCard icon={FileText} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={attendanceHistory.length} label="Sessions Submitted" />
       </div>
       <div className="chart-card" style={{ marginBottom: 20 }}>
-        <div className="chart-title"><Calendar size={18} color="var(--accent)" />Today's Schedule</div>
-        <table>
-          <thead><tr><th>Time</th><th>Subject</th><th>Room</th><th>Section</th><th>Type</th><th>Action</th></tr></thead>
-          <tbody>
-            {todayLectures.map((l, i) => (
-              <tr key={i}>
-                <td style={{ fontWeight: 600 }}>{l.time}</td>
-                <td>{l.subject}</td>
-                <td><span className="badge badge-info">{l.room}</span></td>
-                <td>{l.section}</td>
-                <td><span className={`badge ${l.type === 'lab' ? 'badge-warning' : 'badge-neutral'}`}>{l.type}</span></td>
-                <td><button className="btn btn-accent btn-sm">Mark Attendance</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="chart-title"><Calendar size={18} color="var(--accent)" />Today's Schedule — {todayDay}, {new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+        {todayLectures.length > 0 ? (
+          <table>
+            <thead><tr><th>Time</th><th>Subject</th><th>Room</th><th>Section</th><th>Type</th><th>Action</th></tr></thead>
+            <tbody>
+              {todayLectures.map((l, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{l.time}</td>
+                  <td>{l.subject}</td>
+                  <td><span className="badge badge-info">{l.room}</span></td>
+                  <td>{l.section || '—'}</td>
+                  <td><span className={`badge ${l.type === 'lab' ? 'badge-warning' : 'badge-neutral'}`}>{l.type || 'theory'}</span></td>
+                  <td><a href="/attendance" className="btn btn-accent btn-sm">Mark Attendance</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty-state" style={{ padding: 40 }}>
+            <Calendar size={36} strokeWidth={1.5} />
+            <h3>No lectures scheduled today</h3>
+            <p>Your timetable will appear here once configured.</p>
+          </div>
+        )}
       </div>
     </>
   );
 }
 
 function StudentDashboard() {
-  const mySubjects = [
-    { name: 'Data Structures', code: 'CS301', attendance: 88, status: 'safe' },
-    { name: 'DBMS', code: 'CS302', attendance: 92, status: 'safe' },
-    { name: 'OS', code: 'CS303', attendance: 74, status: 'danger' },
-    { name: 'Networks', code: 'CS304', attendance: 80, status: 'safe' },
-    { name: 'DSA Lab', code: 'CS305', attendance: 95, status: 'safe' },
-  ];
-  const avgAttendance = (mySubjects.reduce((a, s) => a + s.attendance, 0) / mySubjects.length).toFixed(1);
+  const { user } = useAuth();
+  const { studentsList, subjectsList, examsList } = useData();
+
+  // Find logged-in student record
+  const myRecord = useMemo(() =>
+    studentsList.find(s => s.email === user?.email) || studentsList[0],
+    [studentsList, user]
+  );
+
+  // Subjects for the student's department
+  const mySubjects = useMemo(() =>
+    subjectsList.filter(s => s.department === myRecord?.department || s.dept === myRecord?.dept),
+    [subjectsList, myRecord]
+  );
+
+  const avgAttendance = myRecord?.attendance || 0;
+  const upcomingExams = examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming').length;
+
   return (
     <>
       <div className="stats-grid">
-        <StatCard icon={Calendar} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value="4" label="Today's Lectures" />
+        <StatCard icon={Calendar} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={mySubjects.length} label="Enrolled Subjects" />
         <StatCard icon={UserCheck} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={`${avgAttendance}%`} label="Overall Attendance" />
-        <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value="1" label="Upcoming Exams" />
-        <StatCard icon={FileText} iconBg="linear-gradient(135deg, #8b5cf6, #a78bfa)" value="Yes" label="Hall Ticket Ready" />
+        <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={upcomingExams} label="Upcoming Exams" />
+        <StatCard icon={FileText} iconBg="linear-gradient(135deg, #8b5cf6, #a78bfa)" value={upcomingExams > 0 ? 'Available' : 'None'} label="Hall Tickets" />
       </div>
       <div className="chart-card" style={{ marginBottom: 20 }}>
         <div className="chart-title"><UserCheck size={18} color="var(--accent)" />Subject-wise Attendance</div>
-        <table>
-          <thead><tr><th>Subject</th><th>Code</th><th>Attendance</th><th>Status</th></tr></thead>
-          <tbody>
-            {mySubjects.map((s, i) => (
-              <tr key={i}>
-                <td style={{ fontWeight: 500 }}>{s.name}</td>
-                <td style={{ color: 'var(--text-muted)' }}>{s.code}</td>
-                <td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div className="progress-bar" style={{ width: 120 }}>
-                      <div className="progress-fill" style={{ width: `${s.attendance}%`, background: s.attendance >= 75 ? 'var(--success)' : 'var(--error)' }} />
-                    </div>
-                    <span style={{ fontWeight: 600, fontSize: 13 }}>{s.attendance}%</span>
-                  </div>
-                </td>
-                <td>
-                  <span className={`badge ${s.status === 'safe' ? 'badge-success' : 'badge-error'}`}>
-                    {s.status === 'safe' ? '✓ Safe' : '⚠ At Risk'}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {mySubjects.length > 0 ? (
+          <table>
+            <thead><tr><th>Subject</th><th>Code</th><th>Semester</th><th>Credits</th><th>Type</th></tr></thead>
+            <tbody>
+              {mySubjects.map((s, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 500 }}>{s.name}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>{s.code}</td>
+                  <td>{s.semester}</td>
+                  <td>{s.credits}</td>
+                  <td><span className={`badge ${s.type === 'Lab' ? 'badge-warning' : 'badge-neutral'}`}>{s.type}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="empty-state" style={{ padding: 40 }}>
+            <BookOpen size={36} strokeWidth={1.5} />
+            <h3>No subjects enrolled yet</h3>
+            <p>Subjects assigned to your department will appear here.</p>
+          </div>
+        )}
       </div>
     </>
   );
@@ -244,8 +320,9 @@ export default function Dashboard() {
             <p>{settings.institutionName ? `${settings.institutionName} — ` : ''}Here's what's happening today.</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-outline btn-sm"><FileText size={16} /> Export Report</button>
-            <button className="btn btn-primary btn-sm"><Calendar size={16} /> Academic Year 2025-26</button>
+            <span className="badge badge-neutral" style={{ padding: '8px 14px', fontSize: 13 }}>
+              Academic Year {new Date().getFullYear()}-{String(new Date().getFullYear() + 1).slice(2)}
+            </span>
           </div>
         </div>
       </div>
@@ -276,7 +353,7 @@ export default function Dashboard() {
       {role === 'Exam Cell' && (
         <>
           <div className="stats-grid">
-            <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={examsList.filter(e => e.status === 'upcoming').length} label="Upcoming Exams" />
+            <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming').length} label="Upcoming Exams" />
             <StatCard icon={Building} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={classroomsList.length} label="Halls Configured" />
             <StatCard icon={Users} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={studentsList.length.toLocaleString()} label="Students to Seat" />
             <StatCard icon={GraduationCap} iconBg="linear-gradient(135deg, #8b5cf6, #a78bfa)" value={facultyList.length} label="Invigilators Pool" />

@@ -50,7 +50,7 @@ function AppLayout() {
         <div className="card" style={{ width: 320, textAlign: 'center' }}>
           <div className="spinner" style={{ margin: '0 auto 16px' }} />
           <h3>Loading CampusFlow</h3>
-          <p className="text-muted">Connecting to PostgreSQL...</p>
+          <p className="text-muted">Please wait while your data loads...</p>
         </div>
       </div>
     );
@@ -89,7 +89,7 @@ function AppLayout() {
       </div>
       {dataError && (
         <div className="toast" style={{ position: 'fixed', left: 24, bottom: 24, zIndex: 410, background: 'var(--warning)' }}>
-          {dataError} Using the local cache until the API is available.
+          ⚠️ Operating in offline mode. Changes will sync when connection is restored.
         </div>
       )}
       <ToastContainer />

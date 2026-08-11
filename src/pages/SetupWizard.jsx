@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import CollegeHeader from '../components/CollegeHeader';
 import { ChevronRight, ChevronLeft, Check, Plus, Trash2, Image, Eye } from 'lucide-react';
 
@@ -13,6 +14,7 @@ const STEPS = [
 ];
 
 export default function SetupWizard() {
+  const { user } = useAuth();
   const { setSettings, setDepartments, setClassroomsList, completeSetup, showToast, addAudit } = useData();
   const [step, setStep] = useState(0);
   const fileInputRef = useRef(null);
@@ -60,12 +62,14 @@ export default function SetupWizard() {
       active: true, faculty: 0, students: 0,
     }));
     setDepartments(validDepts);
+    const roomTypeLabel = { lecture: 'Lecture Hall', lab: 'Computer Lab', seminar: 'Seminar Hall', exam: 'Exam Hall', drawing: 'Drawing Hall' };
     const validRooms = rooms.filter(r => r.code.trim() && r.name.trim()).map((r, i) => ({
-      id: `r${Date.now()}_${i}`, code: r.code.toUpperCase(), name: r.name, type: r.type,
+      id: `r${Date.now()}_${i}`, code: r.code.toUpperCase(), name: r.name,
+      type: roomTypeLabel[r.type] || r.type,
       capacity: Number(r.capacity), floor: Number(r.floor), dept: null,
     }));
     setClassroomsList(validRooms);
-    addAudit('admin@campus.edu', 'CREATE', 'System', 'Initial Setup Completed');
+    addAudit(user?.email || 'admin', 'CREATE', 'System', 'Initial Setup Completed');
     showToast('Setup complete! Welcome to CampusFlow ERP');
     completeSetup();
   };
@@ -264,6 +268,8 @@ export default function SetupWizard() {
                     <input className="form-input" style={{ flex: 1 }} placeholder="Lecture Hall 101" value={r.name} onChange={e => updateRoomRow(i, 'name', e.target.value)} />
                     <select className="form-select" style={{ width: 110 }} value={r.type} onChange={e => updateRoomRow(i, 'type', e.target.value)}>
                       <option value="lecture">Lecture</option><option value="lab">Lab</option>
+                      <option value="seminar">Seminar Hall</option><option value="exam">Exam Hall</option>
+                      <option value="drawing">Drawing Hall</option>
                     </select>
                     <input className="form-input" style={{ width: 80 }} type="number" value={r.capacity} onChange={e => updateRoomRow(i, 'capacity', e.target.value)} />
                     <input className="form-input" style={{ width: 60 }} type="number" value={r.floor} onChange={e => updateRoomRow(i, 'floor', e.target.value)} />

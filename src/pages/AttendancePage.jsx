@@ -44,11 +44,16 @@ export default function AttendancePage() {
   const defaulters = studentsList.filter(s => s.attendance < 75);
   const deptSubjects = subjectsList.filter(s => s.dept === selectedDept);
 
+  // Real subject-wise attendance from history
   const subjectAtt = useMemo(() =>
-    deptSubjects.filter(s => s.type === 'theory').map(s => ({
-      name: s.code, attendance: Math.floor(Math.random() * 20 + 75),
-    })),
-  [deptSubjects]);
+    deptSubjects.filter(s => s.type === 'theory' || s.type === 'Theory').map(s => {
+      const subRecords = attendanceHistory.filter(h => h.subject === s.code || h.subject === s.name);
+      const totalStudents = subRecords.reduce((a, r) => a + (r.total || 0), 0);
+      const totalPresent = subRecords.reduce((a, r) => a + (r.present || 0), 0);
+      const pct = totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : null;
+      return { name: s.code, fullName: s.name, attendance: pct };
+    }).filter(s => s.attendance !== null),
+  [deptSubjects, attendanceHistory]);
 
   const handleSubmit = () => {
     if (records.length === 0) { showToast('No students to mark!', 'warning'); return; }

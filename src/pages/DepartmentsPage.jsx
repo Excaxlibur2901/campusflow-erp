@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { Building, Plus, Edit, Trash2, Users, GraduationCap, X } from 'lucide-react';
 
 export default function DepartmentsPage() {
+  const { user } = useAuth();
   const { departments, addDepartment, updateDepartment, deleteDepartment, facultyList } = useData();
   const [showModal, setShowModal] = useState(false);
   const [editingDept, setEditingDept] = useState(null);
@@ -33,15 +35,15 @@ export default function DepartmentsPage() {
   const handleSave = () => {
     if (!form.code.trim() || !form.name.trim()) return;
     if (editingDept) {
-      updateDepartment(editingDept.id, form);
+      updateDepartment(editingDept.id, form, user?.email);
     } else {
-      addDepartment(form);
+      addDepartment(form, user?.email);
     }
     setShowModal(false);
   };
 
   const handleDelete = (id) => {
-    deleteDepartment(id);
+    deleteDepartment(id, user?.email);
     setConfirmDelete(null);
   };
 

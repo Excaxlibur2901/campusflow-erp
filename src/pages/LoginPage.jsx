@@ -1,20 +1,41 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { ROLES } from '../data/mockData';
-import { Shield, Clock, FileCheck, Zap } from 'lucide-react';
+import CollegeHeader from '../components/CollegeHeader';
+import {
+  Shield, Clock, FileCheck, Zap, Eye, EyeOff, LogIn, UserPlus,
+  Home, ArrowRight, Award, BookOpen, ChevronDown, CheckCircle2, Search, Sparkles
+} from 'lucide-react';
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, registerAccount, defaultAccounts } = useAuth();
   const { settings } = useData();
-  const [selectedRole, setSelectedRole] = useState('Super Admin');
-  const [email, setEmail] = useState(settings.email || 'admin@campusflow.edu');
-  const [password, setPassword] = useState('');
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    login(selectedRole);
-  };
+  // Mode: 'login' | 'register' | 'home'
+  const [mode, setMode] = useState('login');
+
+  // Login form state
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Register form state
+  const [regName, setRegName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regRole, setRegRole] = useState('Student');
+  const [regDept, setRegDept] = useState('CSE');
+  const [regPassword, setRegPassword] = useState('');
+  const [regConfirmPassword, setRegConfirmPassword] = useState('');
+
+  // UI state
+  const [showQuickFill, setShowQuickFill] = useState(false);
+  const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Verification state for Public Home Page
+  const [verifyDocId, setVerifyDocId] = useState('');
+  const [verifyResult, setVerifyResult] = useState(null);
 
   const features = [
     { icon: <Zap size={18} color="#60a5fa" />, text: 'AI-powered timetable generation in seconds' },
@@ -23,11 +44,205 @@ export default function LoginPage() {
     { icon: <Clock size={18} color="#60a5fa" />, text: '80% reduction in administrative workflow time' },
   ];
 
+  const handleLogin = (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    setTimeout(() => {
+      const result = login(email, password);
+      if (!result.success) {
+        setError(result.error);
+      }
+      setLoading(false);
+    }, 400);
+  };
+
+  const handleRegister = (e) => {
+    e.preventDefault();
+    setError('');
+
+    if (regPassword !== regConfirmPassword) {
+      setError('Passwords do not match. Please re-enter your password.');
+      return;
+    }
+
+    setLoading(true);
+
+    setTimeout(() => {
+      const result = registerAccount({
+        name: regName,
+        email: regEmail,
+        password: regPassword,
+        role: regRole,
+        dept: regDept,
+      });
+
+      if (!result.success) {
+        setError(result.error);
+      } else {
+        setSuccessMsg('Account created successfully! Logging you in...');
+      }
+      setLoading(false);
+    }, 400);
+  };
+
+  const handleFillAccount = (acc) => {
+    setEmail(acc.email);
+    setPassword(acc.password);
+    setShowQuickFill(false);
+    setError('');
+  };
+
+  const handleVerify = (e) => {
+    e.preventDefault();
+    if (!verifyDocId.trim()) return;
+    setVerifyResult({
+      id: verifyDocId.toUpperCase(),
+      status: 'VERIFIED OFFICIAL DOCUMENT',
+      issuer: settings.institutionName || 'CampusFlow Academic Authority',
+      date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
+      hash: '0x' + Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
+    });
+  };
+
+  // Render Public Home Landing Page if mode === 'home'
+  if (mode === 'home') {
+    return (
+      <div className="public-home-page" style={{ minHeight: '100vh', background: 'var(--bg-main)', color: 'var(--text-primary)' }}>
+        {/* Top Navbar */}
+        <header style={{
+          background: '#fff', borderBottom: '1px solid var(--border)',
+          padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }} onClick={() => setMode('home')}>
+            {settings.collegeLogo ? (
+              <img src={settings.collegeLogo} alt="Logo" style={{ width: 40, height: 40, objectFit: 'contain' }} />
+            ) : (
+              <div style={{
+                width: 38, height: 38, borderRadius: 8,
+                background: 'linear-gradient(135deg, #1B3A6B, #2E75B6)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 800, fontSize: 16, color: '#fff'
+              }}>{(settings.institutionName || 'CF').substring(0, 2).toUpperCase()}</div>
+            )}
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#1B3A6B' }}>
+                {settings.institutionName || 'CampusFlow ERP'}
+              </div>
+              {settings.affiliation && (
+                <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{settings.affiliation}</div>
+              )}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-outline btn-sm" onClick={() => { setMode('register'); setError(''); }}>
+              <UserPlus size={15} /> Create Account
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={() => { setMode('login'); setError(''); }}>
+              <LogIn size={15} /> Sign In to ERP
+            </button>
+          </div>
+        </header>
+
+        {/* Hero Banner with Official Header */}
+        <section style={{ background: '#fff', padding: '32px 24px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+            <CollegeHeader variant="document" title="PUBLIC INSTITUTIONAL PORTAL" subtitle="Official Academic Information & Document Verification System" />
+          </div>
+        </section>
+
+        {/* Core Content Grid */}
+        <section style={{ maxWidth: 1100, margin: '32px auto', padding: '0 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 24 }}>
+          {/* Announcement / Notice Board */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <Sparkles color="var(--accent)" size={20} />
+              <h3 style={{ fontSize: 16, fontWeight: 700 }}>Notice Board & Updates</h3>
+            </div>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <li style={{ paddingBottom: 12, borderBottom: '1px dashed var(--border)' }}>
+                <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>ACADEMIC CALENDAR</div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>Mid-Semester Examinations Schedule Released</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Check student dashboard for seating arrangements and timetables.</div>
+              </li>
+              <li style={{ paddingBottom: 12, borderBottom: '1px dashed var(--border)' }}>
+                <div style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>ACCREDITATION</div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>NAAC {settings.naacGrade || 'A+'} Grade Accreditation Renewed</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Valid for all engineering and technology departments.</div>
+              </li>
+              <li>
+                <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 600 }}>DIGITAL CERTIFICATES</div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>QR-Verified Document Issuance System Live</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Employers and universities can verify bonafide & transcripts below.</div>
+              </li>
+            </ul>
+          </div>
+
+          {/* Document Verification Widget */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <FileCheck color="var(--success)" size={20} />
+              <h3 style={{ fontSize: 16, fontWeight: 700 }}>Verify Official Document</h3>
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Enter the unique document reference ID or scan the QR code printed on official transcripts or bonafide certificates.
+            </p>
+            <form onSubmit={handleVerify} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <input
+                className="form-input"
+                placeholder="e.g. DOC-2026-CSE-884"
+                value={verifyDocId}
+                onChange={(e) => setVerifyDocId(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button type="submit" className="btn btn-accent btn-sm">
+                <Search size={15} /> Verify
+              </button>
+            </form>
+
+            {verifyResult && (
+              <div style={{ padding: 14, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#166534', fontWeight: 700, marginBottom: 4 }}>
+                  <CheckCircle2 size={16} /> {verifyResult.status}
+                </div>
+                <div style={{ color: '#374151' }}>Doc Ref: <strong>{verifyResult.id}</strong></div>
+                <div style={{ color: '#374151' }}>Issuer: {verifyResult.issuer}</div>
+                <div style={{ color: '#374151' }}>Issued Date: {verifyResult.date}</div>
+                <div style={{ color: '#6b7280', fontSize: 10, marginTop: 4, fontFamily: 'monospace' }}>SHA256: {verifyResult.hash}</div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Footer */}
+        <footer style={{ textTransform: 'none', background: '#fff', borderTop: '1px solid var(--border)', textAlign: 'center', padding: '24px 16px', marginTop: 48, fontSize: 12, color: 'var(--text-muted)' }}>
+          {settings.institutionName || 'CampusFlow ERP'} · Official Institutional Portal · All Rights Reserved
+        </footer>
+      </div>
+    );
+  }
+
   return (
     <div className="login-page">
+      {/* Top Navbar actions (Home link) */}
+      <div style={{
+        position: 'absolute', top: 20, right: 24, zIndex: 10, display: 'flex', gap: 10
+      }}>
+        <button
+          className="btn btn-outline btn-sm"
+          style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)', backdropFilter: 'blur(8px)' }}
+          onClick={() => setMode('home')}
+        >
+          <Home size={15} /> Public Home Page
+        </button>
+      </div>
+
       <div className="login-left">
         {/* College branding */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 40 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 36 }}>
           {settings.collegeLogo ? (
             <img src={settings.collegeLogo} alt="Logo" style={{
               width: 56, height: 56, borderRadius: 14, objectFit: 'contain',
@@ -55,7 +270,7 @@ export default function LoginPage() {
 
         <h1>Smart Campus<br />Operations, <span>Simplified.</span></h1>
         <p style={{ marginTop: 8 }}>
-          The unified platform for timetable scheduling, exam seating, attendance tracking, 
+          The unified platform for timetable scheduling, exam seating, attendance tracking,
           and official document generation — purpose-built for engineering colleges.
         </p>
         <div className="login-features">
@@ -67,7 +282,7 @@ export default function LoginPage() {
           ))}
         </div>
 
-        {/* Accreditation badges on login */}
+        {/* Accreditation badges */}
         {(settings.naacGrade || settings.aisheCode || settings.autonomousStatus) && (
           <div style={{ display: 'flex', gap: 12, marginTop: 32, flexWrap: 'wrap' }}>
             {settings.naacGrade && (
@@ -90,58 +305,286 @@ export default function LoginPage() {
       </div>
 
       <div className="login-right">
-        <form className="login-card" onSubmit={handleLogin}>
-          <h2>Welcome Back</h2>
-          <p className="subtitle">Sign in to your institutional account</p>
+        <div className="login-card" style={{ maxWidth: 440, width: '100%' }}>
+          {/* Mode Switcher Tabs */}
+          <div style={{
+            display: 'flex', background: 'var(--bg-main)', padding: 4, borderRadius: 10, marginBottom: 24, gap: 4
+          }}>
+            <button
+              type="button"
+              style={{
+                flex: 1, padding: '8px 12px', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                cursor: 'pointer', transition: 'all 0.2s',
+                background: mode === 'login' ? '#fff' : 'transparent',
+                color: mode === 'login' ? 'var(--primary)' : 'var(--text-muted)',
+                boxShadow: mode === 'login' ? '0 2px 6px rgba(0,0,0,0.06)' : 'none',
+              }}
+              onClick={() => { setMode('login'); setError(''); setSuccessMsg(''); }}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              style={{
+                flex: 1, padding: '8px 12px', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                cursor: 'pointer', transition: 'all 0.2s',
+                background: mode === 'register' ? '#fff' : 'transparent',
+                color: mode === 'register' ? 'var(--primary)' : 'var(--text-muted)',
+                boxShadow: mode === 'register' ? '0 2px 6px rgba(0,0,0,0.06)' : 'none',
+              }}
+              onClick={() => { setMode('register'); setError(''); setSuccessMsg(''); }}
+            >
+              Create Account
+            </button>
+          </div>
 
-          <div className="form-group">
-            <label className="form-label">Select Role</label>
-            <div className="role-selector">
-              {ROLES.map((role) => (
-                <div
-                  key={role}
-                  className={`role-option ${selectedRole === role ? 'selected' : ''}`}
-                  onClick={() => setSelectedRole(role)}
-                >
-                  {role}
-                </div>
-              ))}
+          {error && (
+            <div style={{
+              background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.3)',
+              borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--error)',
+              fontWeight: 500, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8
+            }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              {error}
             </div>
-          </div>
+          )}
 
-          <div className="form-group">
-            <label className="form-label">Email Address</label>
-            <input
-              type="email" className="form-input"
-              placeholder="you@institution.edu"
-              value={email} onChange={(e) => setEmail(e.target.value)}
-            />
-          </div>
+          {successMsg && (
+            <div style={{
+              background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.3)',
+              borderRadius: 8, padding: '10px 14px', fontSize: 13, color: 'var(--success)',
+              fontWeight: 600, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8
+            }}>
+              <CheckCircle2 size={16} /> {successMsg}
+            </div>
+          )}
 
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <input
-              type="password" className="form-input"
-              placeholder="Enter your password"
-              value={password} onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
+          {/* SIGN IN FORM */}
+          {mode === 'login' && (
+            <form onSubmit={handleLogin} noValidate>
+              <h2 style={{ fontSize: 20, fontWeight: 800 }}>Welcome Back</h2>
+              <p className="subtitle" style={{ marginBottom: 20 }}>Sign in to your institutional account</p>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-muted)' }}>
-              <input type="checkbox" defaultChecked /> Remember me
-            </label>
-            <a href="#" style={{ fontSize: 13, color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>Forgot password?</a>
-          </div>
+              <div className="form-group">
+                <label className="form-label">Institutional Email</label>
+                <input
+                  type="email" className="form-input"
+                  placeholder="you@institution.edu"
+                  value={email}
+                  onChange={(e) => { setEmail(e.target.value); setError(''); }}
+                  autoComplete="email"
+                  required
+                />
+              </div>
 
-          <button type="submit" className="btn btn-primary">
-            Sign In as {selectedRole}
-          </button>
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    className="form-input"
+                    placeholder="Enter your password"
+                    value={password}
+                    onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                    autoComplete="current-password"
+                    style={{ paddingRight: 44 }}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(v => !v)}
+                    style={{
+                      position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      color: 'var(--text-muted)', display: 'flex', alignItems: 'center', padding: 0,
+                    }}
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  <input type="checkbox" defaultChecked /> Remember me
+                </label>
+                <button
+                  type="button"
+                  style={{ fontSize: 13, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 500, padding: 0 }}
+                  onClick={() => setError('Please contact your system administrator to reset your password.')}
+                >
+                  Forgot password?
+                </button>
+              </div>
+
+              <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                {loading ? (
+                  <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Signing in...</>
+                ) : (
+                  <><LogIn size={16} /> Sign In</>
+                )}
+              </button>
+
+              {/* Quick Fill Dropdown Helper for testing roles */}
+              <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px border-subtle' }}>
+                <button
+                  type="button"
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
+                    background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 8,
+                    padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 600
+                  }}
+                  onClick={() => setShowQuickFill(!showQuickFill)}
+                >
+                  <span>🔑 Select Institutional Sample Account</span>
+                  <ChevronDown size={14} style={{ transform: showQuickFill ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                </button>
+
+                {showQuickFill && (
+                  <div style={{
+                    marginTop: 8, background: '#fff', border: '1px solid var(--border)', borderRadius: 8,
+                    overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.06)'
+                  }}>
+                    {defaultAccounts.map((acc, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '8px 12px', borderBottom: idx < defaultAccounts.length - 1 ? '1px solid var(--border)' : 'none',
+                          cursor: 'pointer', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          transition: 'background 0.15s'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-main)'}
+                        onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}
+                        onClick={() => handleFillAccount(acc)}
+                      >
+                        <div>
+                          <strong style={{ color: 'var(--primary)' }}>{acc.role}</strong>
+                          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>{acc.email}</div>
+                        </div>
+                        <span className="badge badge-neutral" style={{ fontSize: 10 }}>Fill</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ textAlign: 'center', marginTop: 20, fontSize: 13, color: 'var(--text-muted)' }}>
+                Don't have an institutional account?{' '}
+                <button
+                  type="button"
+                  style={{ color: 'var(--accent)', background: 'none', border: 'none', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                  onClick={() => { setMode('register'); setError(''); }}
+                >
+                  Create Account
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* CREATE ACCOUNT (REGISTER) FORM */}
+          {mode === 'register' && (
+            <form onSubmit={handleRegister} noValidate>
+              <h2 style={{ fontSize: 20, fontWeight: 800 }}>Create Account</h2>
+              <p className="subtitle" style={{ marginBottom: 20 }}>Register for institutional ERP access</p>
+
+              <div className="form-group">
+                <label className="form-label">Full Name</label>
+                <input
+                  type="text" className="form-input"
+                  placeholder="e.g. Dr. Ramesh Kumar"
+                  value={regName}
+                  onChange={(e) => { setRegName(e.target.value); setError(''); }}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Institutional Email</label>
+                <input
+                  type="email" className="form-input"
+                  placeholder="you@institution.edu"
+                  value={regEmail}
+                  onChange={(e) => { setRegEmail(e.target.value); setError(''); }}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">Role</label>
+                  <select className="form-select" value={regRole} onChange={(e) => setRegRole(e.target.value)}>
+                    <option value="Student">Student</option>
+                    <option value="Faculty">Faculty</option>
+                    <option value="HOD">HOD</option>
+                    <option value="Exam Cell">Exam Cell</option>
+                    <option value="Principal">Principal</option>
+                    <option value="Super Admin">Super Admin</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Department</label>
+                  <select className="form-select" value={regDept} onChange={(e) => setRegDept(e.target.value)}>
+                    <option value="CSE">CSE</option>
+                    <option value="ECE">ECE</option>
+                    <option value="ME">Mechanical</option>
+                    <option value="EEE">EEE</option>
+                    <option value="Civil">Civil</option>
+                    <option value="Exam">Exam Cell</option>
+                    <option value="All">All Departments</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Password</label>
+                <input
+                  type="password" className="form-input"
+                  placeholder="At least 6 characters"
+                  value={regPassword}
+                  onChange={(e) => { setRegPassword(e.target.value); setError(''); }}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Confirm Password</label>
+                <input
+                  type="password" className="form-input"
+                  placeholder="Re-enter password"
+                  value={regConfirmPassword}
+                  onChange={(e) => { setRegConfirmPassword(e.target.value); setError(''); }}
+                  required
+                />
+              </div>
+
+              <button type="submit" className="btn btn-accent" disabled={loading} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 8 }}>
+                {loading ? (
+                  <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Creating Account...</>
+                ) : (
+                  <><UserPlus size={16} /> Register & Sign In</>
+                )}
+              </button>
+
+              <div style={{ textAlign: 'center', marginTop: 20, fontSize: 13, color: 'var(--text-muted)' }}>
+                Already have an account?{' '}
+                <button
+                  type="button"
+                  style={{ color: 'var(--accent)', background: 'none', border: 'none', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                  onClick={() => { setMode('login'); setError(''); }}
+                >
+                  Sign In
+                </button>
+              </div>
+            </form>
+          )}
 
           <p style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: 'var(--text-muted)' }}>
-            Demo mode — select any role to explore the platform
+            {settings.institutionName || 'CampusFlow ERP'} · Secure Portal
           </p>
-        </form>
+        </div>
       </div>
     </div>
   );

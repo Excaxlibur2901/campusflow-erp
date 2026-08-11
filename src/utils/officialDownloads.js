@@ -174,28 +174,22 @@ const addPdfLetterhead = (pdf, settings, margin) => {
   }
 
   const badgeX = pageWidth - margin - 22;
-  pdf.setDrawColor(217, 119, 6);
-  pdf.setTextColor(217, 119, 6);
   pdf.setFont('helvetica', 'bold');
   pdf.setFontSize(7);
   if (settings?.naacGrade) {
-    pdf.circle(badgeX + 7, headerTop + 10, 7, 'S');
-    pdf.text('NAAC', badgeX + 7, headerTop + 8.5, { align: 'center' });
-    pdf.text(clean(settings.naacGrade), badgeX + 7, headerTop + 12, { align: 'center' });
+    pdf.setTextColor(...PDF_MUTED);
+    pdf.text(`NAAC: ${clean(settings.naacGrade)}`, badgeX + 7, headerTop + 10, { align: 'center' });
   }
   if (settings?.aisheCode) {
     pdf.setTextColor(...PDF_MUTED);
     pdf.setFontSize(6);
-    pdf.text(`AISHE: ${clean(settings.aisheCode)}`, badgeX + 7, headerTop + 22, { align: 'center' });
+    pdf.text(`AISHE: ${clean(settings.aisheCode)}`, badgeX + 7, headerTop + 16, { align: 'center' });
   }
 
   const dividerY = Math.max(y + 2, headerTop + 25);
-  pdf.setDrawColor(...PDF_PRIMARY);
-  pdf.setLineWidth(0.6);
+  pdf.setDrawColor(60, 60, 60);
+  pdf.setLineWidth(0.4);
   pdf.line(margin, dividerY, pageWidth - margin, dividerY);
-  pdf.setDrawColor(...PDF_ACCENT);
-  pdf.setLineWidth(0.3);
-  pdf.line(margin, dividerY + 1.2, pageWidth - margin, dividerY + 1.2);
   return dividerY + 8;
 };
 
@@ -203,14 +197,9 @@ const addPdfBorder = (pdf) => {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
 
-  // Outer border: 0.7pt stroke, color [27,58,107], 8mm from edges
-  pdf.setDrawColor(27, 58, 107);
-  pdf.setLineWidth(0.7);
-  pdf.rect(8, 8, pageWidth - 16, pageHeight - 16);
-
-  // Inner border: 0.3pt stroke, color [46,117,182], 10mm from edges
-  pdf.setDrawColor(46, 117, 182);
-  pdf.setLineWidth(0.3);
+  // Single clean border
+  pdf.setDrawColor(60, 60, 60);
+  pdf.setLineWidth(0.5);
   pdf.rect(10, 10, pageWidth - 20, pageHeight - 20);
 };
 
@@ -218,12 +207,12 @@ const addPdfWatermark = (pdf) => {
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
 
-  pdf.setTextColor(230, 230, 230);
+  pdf.setTextColor(240, 240, 240);
   pdf.setFont('helvetica', 'bold');
-  pdf.setFontSize(40);
-  pdf.text('OFFICIAL COPY', pageWidth / 2, pageHeight / 2, {
+  pdf.setFontSize(36);
+  pdf.text('OFFICIAL', pageWidth / 2, pageHeight / 2, {
     align: 'center',
-    angle: -40,
+    angle: -45,
   });
 };
 

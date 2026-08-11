@@ -4,7 +4,8 @@ import CollegeHeader from '../components/CollegeHeader';
 import { Save, Upload, Database, AlertTriangle, Image } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { settings, setSettings, showToast, addAudit, resetAll } = useData();
+  const { settings, setSettings, showToast, addAudit, resetAll,
+    departments, facultyList, subjectsList, classroomsList, studentsList, examsList } = useData();
   const [activeTab, setActiveTab] = useState('institution');
   const [form, setForm] = useState({ ...settings });
   const [backups, setBackups] = useState([]);
@@ -18,10 +19,28 @@ export default function SettingsPage() {
   };
 
   const handleBackup = () => {
+    const backupData = {
+      exportedAt: new Date().toISOString(),
+      version: '1.0',
+      settings,
+      departments,
+      faculty: facultyList,
+      subjects: subjectsList,
+      classrooms: classroomsList,
+      students: studentsList,
+      exams: examsList,
+    };
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `campusflow_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
     const name = `backup_${new Date().toISOString().split('T')[0]}.json`;
-    setBackups(prev => [{ name, size: '~1 KB', date: new Date().toLocaleDateString(), status: 'Completed' }, ...prev]);
-    showToast('Backup created!');
-    addAudit('admin@campus.edu', 'BACKUP', 'System', name);
+    setBackups(prev => [{ name, size: `${(JSON.stringify(backupData).length / 1024).toFixed(1)} KB`, date: new Date().toLocaleDateString(), status: 'Completed' }, ...prev]);
+    showToast('Backup downloaded successfully!');
+    addAudit(settings.email || 'admin', 'BACKUP', 'System', name);
   };
 
   const handleLogoUpload = (e) => {
@@ -151,7 +170,7 @@ export default function SettingsPage() {
           </div>
           <div style={{display:'flex',gap:12,marginBottom:20}}>
             <button className="btn btn-accent" onClick={handleBackup}><Database size={16}/> Create Backup Now</button>
-            <button className="btn btn-outline" onClick={()=>showToast('Restore dialog opened','info')}><Upload size={16}/> Restore from Backup</button>
+            <button className="btn btn-outline" onClick={()=>showToast('To restore, import the JSON backup file via your server administrator or re-run the setup wizard after a reset.','info')}><Upload size={16}/> Restore from Backup</button>
           </div>
           <div className="table-container">
             <table>

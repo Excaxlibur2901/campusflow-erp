@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { Plus, Edit, Trash2 } from 'lucide-react';
 
 export default function FacultyPage() {
+  const { user } = useAuth();
   const { facultyList, addFaculty, updateFaculty, deleteFaculty, departments } = useData();
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('All');
@@ -19,7 +21,7 @@ export default function FacultyPage() {
 
   const openAdd = () => { setEditingFac(null); setForm({ name:'', empCode:`FAC${String(facultyList.length+1).padStart(3,'0')}`, dept:'CSE', specialization:'', maxHours:22, currentHours:0 }); setShowModal(true); };
   const openEdit = (f) => { setEditingFac(f); setForm({ name:f.name, empCode:f.empCode, dept:f.dept, specialization:f.specialization, maxHours:f.maxHours, currentHours:f.currentHours }); setShowModal(true); };
-  const handleSave = () => { if(!form.name.trim()) return; if(editingFac) updateFaculty(editingFac.id, {...form, maxHours:Number(form.maxHours), currentHours:Number(form.currentHours)}); else addFaculty({...form, maxHours:Number(form.maxHours), currentHours:Number(form.currentHours)}); setShowModal(false); };
+  const handleSave = () => { if(!form.name.trim()) return; if(editingFac) updateFaculty(editingFac.id, {...form, maxHours:Number(form.maxHours), currentHours:Number(form.currentHours)}, user?.email); else addFaculty({...form, maxHours:Number(form.maxHours), currentHours:Number(form.currentHours)}, user?.email); setShowModal(false); };
 
   return (
     <div className="fade-in">

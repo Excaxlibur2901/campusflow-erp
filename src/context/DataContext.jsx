@@ -186,52 +186,55 @@ export function DataProvider({ children }) {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
-  const addAudit = (user, action, module, entity) => {
+  // currentUserRef is populated by DataProvider consumers (App) after auth
+  const currentUserEmailRef = { current: 'system' };
+
+  const addAudit = (userEmail, action, module, entity) => {
     const now = new Date();
     const time = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-    setAuditLogsList(prev => [{ id: `a${Date.now()}`, user, action, module, entity, time, ip: '192.168.1.' + Math.floor(Math.random()*100+1) }, ...prev]);
+    setAuditLogsList(prev => [{ id: `a${Date.now()}`, user: userEmail || currentUserEmailRef.current || 'system', action, module, entity, time, ip: 'N/A' }, ...prev]);
   };
 
-  const addDepartment = (dept) => { setDepartments(prev => [...prev, { ...dept, id: `d${Date.now()}`, active: true, faculty: 0, students: 0 }]); showToast(`Department "${dept.name}" added`); addAudit('admin@campus.edu','CREATE','Departments',dept.name); };
-  const updateDepartment = (id, u) => { setDepartments(prev => prev.map(d => d.id === id ? { ...d, ...u } : d)); showToast('Department updated'); addAudit('admin@campus.edu','UPDATE','Departments',u.name||id); };
-  const deleteDepartment = (id) => { const d = departments.find(x => x.id === id); setDepartments(prev => prev.filter(x => x.id !== id)); showToast(`"${d?.name}" deleted`,'error'); addAudit('admin@campus.edu','DELETE','Departments',d?.name||id); };
+  const addDepartment = (dept, userEmail) => { setDepartments(prev => [...prev, { ...dept, id: `d${Date.now()}`, active: true, faculty: 0, students: 0 }]); showToast(`Department "${dept.name}" added`); addAudit(userEmail,'CREATE','Departments',dept.name); };
+  const updateDepartment = (id, u, userEmail) => { setDepartments(prev => prev.map(d => d.id === id ? { ...d, ...u } : d)); showToast('Department updated'); addAudit(userEmail,'UPDATE','Departments',u.name||id); };
+  const deleteDepartment = (id, userEmail) => { const d = departments.find(x => x.id === id); setDepartments(prev => prev.filter(x => x.id !== id)); showToast(`"${d?.name}" deleted`,'error'); addAudit(userEmail,'DELETE','Departments',d?.name||id); };
 
-  const addFaculty = (f) => { setFacultyList(prev => [...prev, { ...f, id: `f${Date.now()}` }]); showToast(`Faculty "${f.name}" added`); addAudit('admin@campus.edu','CREATE','Faculty',f.name); };
-  const updateFaculty = (id, u) => { setFacultyList(prev => prev.map(f => f.id === id ? { ...f, ...u } : f)); showToast('Faculty updated'); addAudit('admin@campus.edu','UPDATE','Faculty',u.name||id); };
-  const deleteFaculty = (id) => { const f = facultyList.find(x => x.id === id); setFacultyList(prev => prev.filter(x => x.id !== id)); showToast(`"${f?.name}" removed`,'error'); addAudit('admin@campus.edu','DELETE','Faculty',f?.name||id); };
+  const addFaculty = (f, userEmail) => { setFacultyList(prev => [...prev, { ...f, id: `f${Date.now()}` }]); showToast(`Faculty "${f.name}" added`); addAudit(userEmail,'CREATE','Faculty',f.name); };
+  const updateFaculty = (id, u, userEmail) => { setFacultyList(prev => prev.map(f => f.id === id ? { ...f, ...u } : f)); showToast('Faculty updated'); addAudit(userEmail,'UPDATE','Faculty',u.name||id); };
+  const deleteFaculty = (id, userEmail) => { const f = facultyList.find(x => x.id === id); setFacultyList(prev => prev.filter(x => x.id !== id)); showToast(`"${f?.name}" removed`,'error'); addAudit(userEmail,'DELETE','Faculty',f?.name||id); };
 
-  const addSubject = (s) => { setSubjectsList(prev => [...prev, { ...s, id: `s${Date.now()}` }]); showToast(`Subject "${s.name}" added`); addAudit('admin@campus.edu','CREATE','Subjects',s.name); };
-  const updateSubject = (id, u) => { setSubjectsList(prev => prev.map(s => s.id === id ? { ...s, ...u } : s)); showToast('Subject updated'); addAudit('admin@campus.edu','UPDATE','Subjects',u.name||id); };
-  const deleteSubject = (id) => { const s = subjectsList.find(x => x.id === id); setSubjectsList(prev => prev.filter(x => x.id !== id)); showToast(`"${s?.name}" deleted`,'error'); addAudit('admin@campus.edu','DELETE','Subjects',s?.name||id); };
+  const addSubject = (s, userEmail) => { setSubjectsList(prev => [...prev, { ...s, id: `s${Date.now()}` }]); showToast(`Subject "${s.name}" added`); addAudit(userEmail,'CREATE','Subjects',s.name); };
+  const updateSubject = (id, u, userEmail) => { setSubjectsList(prev => prev.map(s => s.id === id ? { ...s, ...u } : s)); showToast('Subject updated'); addAudit(userEmail,'UPDATE','Subjects',u.name||id); };
+  const deleteSubject = (id, userEmail) => { const s = subjectsList.find(x => x.id === id); setSubjectsList(prev => prev.filter(x => x.id !== id)); showToast(`"${s?.name}" deleted`,'error'); addAudit(userEmail,'DELETE','Subjects',s?.name||id); };
 
-  const addClassroom = (r) => { setClassroomsList(prev => [...prev, { ...r, id: `r${Date.now()}` }]); showToast(`Room "${r.code}" added`); addAudit('admin@campus.edu','CREATE','Classrooms',r.code); };
-  const updateClassroom = (id, u) => { setClassroomsList(prev => prev.map(r => r.id === id ? { ...r, ...u } : r)); showToast('Room updated'); addAudit('admin@campus.edu','UPDATE','Classrooms',u.code||id); };
-  const deleteClassroom = (id) => { const r = classroomsList.find(x => x.id === id); setClassroomsList(prev => prev.filter(x => x.id !== id)); showToast(`"${r?.code}" deleted`,'error'); addAudit('admin@campus.edu','DELETE','Classrooms',r?.code||id); };
+  const addClassroom = (r, userEmail) => { setClassroomsList(prev => [...prev, { ...r, id: `r${Date.now()}` }]); showToast(`Room "${r.code}" added`); addAudit(userEmail,'CREATE','Classrooms',r.code); };
+  const updateClassroom = (id, u, userEmail) => { setClassroomsList(prev => prev.map(r => r.id === id ? { ...r, ...u } : r)); showToast('Room updated'); addAudit(userEmail,'UPDATE','Classrooms',u.code||id); };
+  const deleteClassroom = (id, userEmail) => { const r = classroomsList.find(x => x.id === id); setClassroomsList(prev => prev.filter(x => x.id !== id)); showToast(`"${r?.code}" deleted`,'error'); addAudit(userEmail,'DELETE','Classrooms',r?.code||id); };
 
-  const addStudent = (s) => { setStudentsList(prev => [...prev, { ...s, id: `st${Date.now()}`, attendance: 100 }]); showToast(`Student "${s.name}" enrolled`); addAudit('admin@campus.edu','CREATE','Students',s.name); };
-  const updateStudent = (id, u) => { setStudentsList(prev => prev.map(s => s.id === id ? { ...s, ...u } : s)); showToast('Student updated'); addAudit('admin@campus.edu','UPDATE','Students',u.name||id); };
-  const deleteStudent = (id) => { const s = studentsList.find(x => x.id === id); setStudentsList(prev => prev.filter(x => x.id !== id)); showToast(`"${s?.name}" removed`,'error'); addAudit('admin@campus.edu','DELETE','Students',s?.name||id); };
+  const addStudent = (s, userEmail) => { setStudentsList(prev => [...prev, { ...s, id: `st${Date.now()}`, attendance: 100 }]); showToast(`Student "${s.name}" enrolled`); addAudit(userEmail,'CREATE','Students',s.name); };
+  const updateStudent = (id, u, userEmail) => { setStudentsList(prev => prev.map(s => s.id === id ? { ...s, ...u } : s)); showToast('Student updated'); addAudit(userEmail,'UPDATE','Students',u.name||id); };
+  const deleteStudent = (id, userEmail) => { const s = studentsList.find(x => x.id === id); setStudentsList(prev => prev.filter(x => x.id !== id)); showToast(`"${s?.name}" removed`,'error'); addAudit(userEmail,'DELETE','Students',s?.name||id); };
 
-  const addExam = (e) => { setExamsList(prev => [...prev, { ...e, id: `e${Date.now()}` }]); showToast(`Exam "${e.name}" created`); addAudit('exam@campus.edu','CREATE','Exams',e.name); };
-  const updateExam = (id, u) => { setExamsList(prev => prev.map(e => e.id === id ? { ...e, ...u } : e)); showToast('Exam updated'); addAudit('exam@campus.edu','UPDATE','Exams',u.name||id); };
-  const deleteExam = (id) => { const e = examsList.find(x => x.id === id); setExamsList(prev => prev.filter(x => x.id !== id)); showToast(`"${e?.name}" deleted`,'error'); addAudit('exam@campus.edu','DELETE','Exams',e?.name||id); };
+  const addExam = (e, userEmail) => { setExamsList(prev => [...prev, { ...e, id: `e${Date.now()}` }]); showToast(`Exam "${e.name}" created`); addAudit(userEmail,'CREATE','Exams',e.name); };
+  const updateExam = (id, u, userEmail) => { setExamsList(prev => prev.map(e => e.id === id ? { ...e, ...u } : e)); showToast('Exam updated'); addAudit(userEmail,'UPDATE','Exams',u.name||id); };
+  const deleteExam = (id, userEmail) => { const e = examsList.find(x => x.id === id); setExamsList(prev => prev.filter(x => x.id !== id)); showToast(`"${e?.name}" deleted`,'error'); addAudit(userEmail,'DELETE','Exams',e?.name||id); };
 
   const markAllRead = () => { setNotificationsList(prev => prev.map(n => ({ ...n, read: true }))); showToast('All marked as read'); };
   const markRead = (id) => { setNotificationsList(prev => prev.map(n => n.id === id ? { ...n, read: true } : n)); };
   const addNotification = (n) => { setNotificationsList(prev => [{ ...n, id: `n${Date.now()}`, read: false, time: 'Just now' }, ...prev]); };
   const deleteNotification = (id) => { setNotificationsList(prev => prev.filter(n => n.id !== id)); showToast('Notification dismissed'); };
 
-  const submitAttendance = (record) => {
+  const submitAttendance = (record, userEmail) => {
     setAttendanceHistory(prev => [record, ...prev]);
     showToast('Attendance submitted!');
-    addAudit('faculty@campus.edu','SUBMIT','Attendance',`${record.subject} ${record.date}`);
+    addAudit(userEmail,'SUBMIT','Attendance',`${record.subject} ${record.date}`);
     addNotification({ type: 'attendance', title: 'Attendance Submitted', message: `Attendance for ${record.subject} on ${record.date} submitted.` });
   };
 
-  const generateDocument = (doc) => {
+  const generateDocument = (doc, userEmail) => {
     setDocuments(prev => [{ ...doc, id: `doc${Date.now()}`, date: new Date().toISOString().split('T')[0], status: 'generated' }, ...prev]);
     showToast(`"${doc.title}" generated`);
-    addAudit('admin@campus.edu','GENERATE','Documents',doc.title);
+    addAudit(userEmail,'GENERATE','Documents',doc.title);
   };
 
   const value = {

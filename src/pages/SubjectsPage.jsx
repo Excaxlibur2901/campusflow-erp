@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { Plus, Edit, Trash2 } from 'lucide-react';
 
 export default function SubjectsPage() {
+  const { user } = useAuth();
   const { subjectsList, addSubject, updateSubject, deleteSubject, departments } = useData();
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('All');
@@ -18,7 +20,7 @@ export default function SubjectsPage() {
 
   const openAdd = () => { setEditingSub(null); setForm({ code:'', name:'', dept:'CSE', credits:3, type:'theory', weeklyHours:3, semester:3 }); setShowModal(true); };
   const openEdit = (s) => { setEditingSub(s); setForm({ code:s.code, name:s.name, dept:s.dept, credits:s.credits, type:s.type, weeklyHours:s.weeklyHours, semester:s.semester }); setShowModal(true); };
-  const handleSave = () => { if(!form.code.trim()||!form.name.trim()) return; const data = {...form, credits:Number(form.credits), weeklyHours:Number(form.weeklyHours), semester:Number(form.semester)}; if(editingSub) updateSubject(editingSub.id, data); else addSubject(data); setShowModal(false); };
+  const handleSave = () => { if(!form.code.trim()||!form.name.trim()) return; const data = {...form, credits:Number(form.credits), weeklyHours:Number(form.weeklyHours), semester:Number(form.semester)}; if(editingSub) updateSubject(editingSub.id, data, user?.email); else addSubject(data, user?.email); setShowModal(false); };
 
   return (
     <div className="fade-in">
