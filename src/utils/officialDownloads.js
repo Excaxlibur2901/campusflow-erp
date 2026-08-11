@@ -14,6 +14,7 @@ import {
   TextRun,
   WidthType,
 } from 'docx';
+import { generateVerificationQR } from './qrCode.js';
 
 const PRIMARY = '1B3A6B';
 const ACCENT = '2E75B6';
@@ -95,6 +96,20 @@ const rowsFromDetails = (details = []) =>
 const normalizeColumns = (columns = []) => columns.map(clean).filter(Boolean);
 
 const normalizeRows = (rows = []) => rows.map((row) => row.map((cell) => clean(cell)));
+
+/* ------------------------------------------------------------------ */
+/*  Reference number helper                                           */
+/* ------------------------------------------------------------------ */
+
+const generateRef = (type) => {
+  const year = new Date().getFullYear();
+  const serial = String(Date.now() % 100000).padStart(5, '0');
+  return `CF/${type}/${year}/${serial}`;
+};
+
+/* ------------------------------------------------------------------ */
+/*  PDF helpers                                                       */
+/* ------------------------------------------------------------------ */
 
 const addPdfLetterhead = (pdf, settings, margin) => {
   const pageWidth = pdf.internal.pageSize.getWidth();
@@ -184,20 +199,81 @@ const addPdfLetterhead = (pdf, settings, margin) => {
   return dividerY + 8;
 };
 
-const addPdfFooter = (pdf, footerText) => {
+const addPdfBorder = (pdf) => {
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+
+  // Outer border: 0.7pt stroke, color [27,58,107], 8mm from edges
+  pdf.setDrawColor(27, 58, 107);
+  pdf.setLineWidth(0.7);
+  pdf.rect(8, 8, pageWidth - 16, pageHeight - 16);
+
+  // Inner border: 0.3pt stroke, color [46,117,182], 10mm from edges
+  pdf.setDrawColor(46, 117, 182);
+  pdf.setLineWidth(0.3);
+  pdf.rect(10, 10, pageWidth - 20, pageHeight - 20);
+};
+
+const addPdfWatermark = (pdf) => {
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+
+  pdf.setTextColor(230, 230, 230);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(40);
+  pdf.text('OFFICIAL COPY', pageWidth / 2, pageHeight / 2, {
+    align: 'center',
+    angle: -40,
+  });
+};
+
+const addPdfFooter = (pdf, footerText, footerId, title) => {
   const pageCount = pdf.getNumberOfPages();
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
 
+  // Generate QR data URL once for all pages
+  const qrPayload = JSON.stringify({
+    ref: footerId,
+    title,
+    date: new Date().toISOString().split('T')[0],
+  });
+  let qrDataUrl = null;
+  try {
+    qrDataUrl = generateVerificationQR(qrPayload);
+  } catch {
+    // If QR generation fails (e.g. no canvas in environment), skip it
+  }
+
   for (let page = 1; page <= pageCount; page += 1) {
     pdf.setPage(page);
+
+    // Draw page borders
+    addPdfBorder(pdf);
+
+    // Draw watermark
+    addPdfWatermark(pdf);
+
+    // Footer line and text
     pdf.setDrawColor(226, 232, 240);
+    pdf.setLineWidth(0.3);
     pdf.line(14, pageHeight - 14, pageWidth - 14, pageHeight - 14);
     pdf.setTextColor(...PDF_MUTED);
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(7);
     pdf.text(footerText, 14, pageHeight - 9);
     pdf.text(`Page ${page} of ${pageCount}`, pageWidth - 14, pageHeight - 9, { align: 'right' });
+
+    // QR code in footer area (bottom-right)
+    if (qrDataUrl) {
+      try {
+        const qrX = pageWidth - 14 - 20; // margin=14, then offset by 20 for QR width area
+        const qrY = pageHeight - 30;
+        pdf.addImage(qrDataUrl, 'PNG', qrX, qrY, 16, 16);
+      } catch {
+        // silently skip QR if addImage fails
+      }
+    }
   }
 };
 
@@ -206,6 +282,52 @@ const addWrappedText = (pdf, text, x, y, maxWidth, lineHeight = 5, options = {})
   pdf.text(lines, x, y, options);
   return y + lines.length * lineHeight;
 };
+
+const addPdfSignatories = (pdf, signatories, margin, y) => {
+  if (!signatories || !signatories.length) return y;
+
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const usableWidth = pageWidth - margin * 2;
+  const count = signatories.length;
+  const spacing = usableWidth / count;
+
+  // Add some vertical space before signatures
+  y += 15;
+
+  for (let i = 0; i < count; i += 1) {
+    const centerX = margin + spacing * i + spacing / 2;
+    const lineHalf = 15; // 30mm total line width / 2
+
+    // Signature line (30mm)
+    pdf.setDrawColor(100, 100, 100);
+    pdf.setLineWidth(0.4);
+    pdf.line(centerX - lineHalf, y, centerX + lineHalf, y);
+
+    // Name (bold, 9pt)
+    const nameText = clean(signatories[i].name);
+    if (nameText) {
+      pdf.setTextColor(40, 40, 40);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(9);
+      pdf.text(nameText, centerX, y + 5, { align: 'center' });
+    }
+
+    // Designation (normal, 8pt, muted)
+    const desigText = clean(signatories[i].designation);
+    if (desigText) {
+      pdf.setTextColor(...PDF_MUTED);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8);
+      pdf.text(desigText, centerX, y + (nameText ? 10 : 5), { align: 'center' });
+    }
+  }
+
+  return y + 18;
+};
+
+/* ------------------------------------------------------------------ */
+/*  DOCX helpers                                                      */
+/* ------------------------------------------------------------------ */
 
 const run = (text, options = {}) =>
   new TextRun({
@@ -354,6 +476,10 @@ const docxTable = (columns, rows) =>
     ],
   });
 
+/* ------------------------------------------------------------------ */
+/*  Core PDF export                                                    */
+/* ------------------------------------------------------------------ */
+
 export const downloadOfficialPdf = ({
   settings,
   title,
@@ -364,6 +490,7 @@ export const downloadOfficialPdf = ({
   rows = [],
   filename,
   footerId,
+  signatories,
 }) => {
   const margin = parseMarginMm(settings?.pageMargins);
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -427,12 +554,27 @@ export const downloadOfficialPdf = ({
       headStyles: { fillColor: [27, 58, 107], textColor: 255 },
       alternateRowStyles: { fillColor: [245, 247, 250] },
     });
+    y = pdf.lastAutoTable.finalY + 5;
+  }
+
+  // Signature block (before footer)
+  if (signatories && signatories.length > 0) {
+    addPdfSignatories(pdf, signatories, margin, y);
   }
 
   const generated = new Date().toLocaleString();
-  addPdfFooter(pdf, `Generated by CampusFlow ERP | ${generated}${footerId ? ` | Ref: ${footerId}` : ''}`);
+  addPdfFooter(
+    pdf,
+    `Generated by CampusFlow ERP | ${generated}${footerId ? ` | Ref: ${footerId}` : ''}`,
+    footerId,
+    title,
+  );
   pdf.save(`${sanitizeFilename(filename || title)}.pdf`);
 };
+
+/* ------------------------------------------------------------------ */
+/*  Core DOCX export                                                   */
+/* ------------------------------------------------------------------ */
 
 export const downloadOfficialDocx = async ({
   settings,
@@ -444,6 +586,7 @@ export const downloadOfficialDocx = async ({
   rows = [],
   filename,
   footerId,
+  signatories,
 }) => {
   const margin = Math.round(parseMarginMm(settings?.pageMargins) * 56.7);
   const children = [
@@ -492,6 +635,32 @@ export const downloadOfficialDocx = async ({
     children.push(docxTable(normalizedColumns, normalizedRows));
   }
 
+  // Signatory block in DOCX
+  if (signatories && signatories.length > 0) {
+    children.push(paragraph('', { spacing: { after: 400 } }));
+    const sigChildren = [];
+    signatories.forEach((sig, idx) => {
+      if (idx > 0) {
+        sigChildren.push(new TextRun({ text: '          ', size: 18 }));
+      }
+      sigChildren.push(new TextRun({ text: '____________________', size: 18 }));
+      sigChildren.push(new TextRun({ text: '\n', break: 1, size: 18 }));
+      if (clean(sig.name)) {
+        sigChildren.push(new TextRun({ text: clean(sig.name), bold: true, size: 18 }));
+        sigChildren.push(new TextRun({ text: '\n', break: 1, size: 18 }));
+      }
+      if (clean(sig.designation)) {
+        sigChildren.push(new TextRun({ text: clean(sig.designation), color: MUTED, size: 16 }));
+        sigChildren.push(new TextRun({ text: '\n', break: 1, size: 16 }));
+      }
+    });
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 200 },
+      children: sigChildren,
+    }));
+  }
+
   children.push(paragraph('', { spacing: { after: 180 } }));
   children.push(paragraph(
     `Generated by CampusFlow ERP | ${new Date().toLocaleString()}${footerId ? ` | Ref: ${footerId}` : ''}`,
@@ -519,6 +688,10 @@ export const downloadOfficialDocx = async ({
   saveAs(blob, `${sanitizeFilename(filename || title)}.docx`);
 };
 
+/* ------------------------------------------------------------------ */
+/*  Unified format dispatcher (preserved signature)                    */
+/* ------------------------------------------------------------------ */
+
 export const downloadOfficialFile = async (format, options) => {
   if (format === 'pdf') {
     downloadOfficialPdf(options);
@@ -526,6 +699,10 @@ export const downloadOfficialFile = async (format, options) => {
   }
   await downloadOfficialDocx(options);
 };
+
+/* ------------------------------------------------------------------ */
+/*  Document export payload (preserved)                                */
+/* ------------------------------------------------------------------ */
 
 export const documentExportPayload = (doc, settings) => ({
   settings,
@@ -550,3 +727,287 @@ export const documentExportPayload = (doc, settings) => ({
   filename: doc.title,
   footerId: doc.id,
 });
+
+/* ================================================================== */
+/*  NEW EXPORT FUNCTIONS                                              */
+/* ================================================================== */
+
+/* ------------------------------------------------------------------ */
+/*  1. Fee Receipt                                                     */
+/* ------------------------------------------------------------------ */
+
+export const downloadFeeReceipt = (format, { student, settings, feeItems, paymentMode, transactionId }) => {
+  const year = new Date().getFullYear();
+  const receiptNo = generateRef('FEE');
+  const totalAmount = (feeItems || []).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+
+  const payload = {
+    settings,
+    title: 'FEE RECEIPT',
+    subtitle: `Academic Year ${year}-${String(year + 1).slice(2)}`,
+    details: [
+      { label: 'Student Name', value: clean(student?.name) },
+      { label: 'Roll No', value: clean(student?.rollNo) },
+      { label: 'Department', value: clean(student?.dept) },
+      { label: 'Semester', value: clean(student?.semester) },
+      { label: 'Receipt No', value: receiptNo },
+      { label: 'Date', value: new Date().toLocaleDateString('en-IN') },
+      { label: 'Payment Mode', value: clean(paymentMode) },
+      { label: 'Transaction ID', value: clean(transactionId) },
+    ],
+    columns: ['#', 'Fee Component', 'Amount (₹)'],
+    rows: [
+      ...(feeItems || []).map((item, idx) => [
+        String(idx + 1),
+        clean(item.name),
+        Number(item.amount || 0).toLocaleString('en-IN'),
+      ]),
+      ['', 'TOTAL', totalAmount.toLocaleString('en-IN')],
+    ],
+    signatories: [
+      { name: '', designation: 'Accounts Section' },
+      { name: settings?.principalName || '', designation: 'Principal' },
+    ],
+    filename: `Fee_Receipt_${clean(student?.name)}`,
+    footerId: receiptNo,
+  };
+
+  return downloadOfficialFile(format, payload);
+};
+
+/* ------------------------------------------------------------------ */
+/*  2. Hall Ticket                                                     */
+/* ------------------------------------------------------------------ */
+
+export const downloadHallTicket = (format, { student, settings, exam }) => {
+  const hallTicketRef = generateRef('HLT');
+
+  const payload = {
+    settings,
+    title: 'HALL TICKET / ADMIT CARD',
+    subtitle: clean(exam?.name),
+    details: [
+      { label: 'Student Name', value: clean(student?.name) },
+      { label: 'Roll No', value: clean(student?.rollNo) },
+      { label: 'Department', value: clean(student?.dept) },
+      { label: 'Semester', value: clean(student?.semester) },
+      { label: 'Exam', value: clean(exam?.name) },
+      { label: 'Date', value: clean(exam?.date) },
+      { label: 'Time', value: `${clean(exam?.startTime)} - ${clean(exam?.endTime)}` },
+    ],
+    sections: [
+      {
+        heading: 'Examination Subjects',
+        lines: exam?.subjects || [],
+      },
+      {
+        heading: 'Instructions to Candidates',
+        lines: [
+          'Candidates must be seated 15 minutes before the examination.',
+          'Bring this hall ticket and college ID card to every examination.',
+          'Electronic devices including mobile phones are strictly prohibited.',
+          'Use of unfair means will lead to cancellation of examination.',
+          'Candidates must not leave the hall within the first 30 minutes.',
+        ],
+      },
+    ],
+    signatories: [
+      { name: '', designation: 'Controller of Examinations' },
+      { name: settings?.principalName || '', designation: 'Principal' },
+    ],
+    filename: `Hall_Ticket_${clean(student?.name)}`,
+    footerId: hallTicketRef,
+  };
+
+  return downloadOfficialFile(format, payload);
+};
+
+/* ------------------------------------------------------------------ */
+/*  3. Attendance Report                                               */
+/* ------------------------------------------------------------------ */
+
+export const downloadAttendanceReport = (format, { student, settings, records, subjects }) => {
+  const attendanceRef = generateRef('ATT');
+  const subjectList = subjects || [];
+  const allRecords = records || [];
+
+  // Compute per-subject attendance for this student
+  const subjectRows = subjectList.map((subj) => {
+    const subjectName = typeof subj === 'string' ? subj : clean(subj.name || subj);
+    // Filter records for this student and subject
+    const relevantRecords = allRecords.filter(
+      (r) =>
+        (clean(r.studentId) === clean(student?.id) ||
+          clean(r.rollNo) === clean(student?.rollNo) ||
+          clean(r.student) === clean(student?.name)) &&
+        (clean(r.subject) === subjectName || clean(r.subjectName) === subjectName),
+    );
+    const total = relevantRecords.length || 0;
+    const present = relevantRecords.filter((r) => r.status === 'Present' || r.present === true).length;
+    const absent = total - present;
+    const percentage = total > 0 ? ((present / total) * 100).toFixed(1) : '0.0';
+    return [subjectName, String(total), String(present), String(absent), `${percentage}%`];
+  });
+
+  // Overall summary row
+  const totalClasses = subjectRows.reduce((sum, row) => sum + Number(row[1]), 0);
+  const totalPresent = subjectRows.reduce((sum, row) => sum + Number(row[2]), 0);
+  const totalAbsent = subjectRows.reduce((sum, row) => sum + Number(row[3]), 0);
+  const overallPct = totalClasses > 0 ? ((totalPresent / totalClasses) * 100).toFixed(1) : '0.0';
+
+  const payload = {
+    settings,
+    title: 'ATTENDANCE REPORT',
+    subtitle: `${clean(student?.name)} | ${clean(student?.rollNo)}`,
+    details: [
+      { label: 'Student Name', value: clean(student?.name) },
+      { label: 'Roll No', value: clean(student?.rollNo) },
+      { label: 'Department', value: clean(student?.dept) },
+      { label: 'Semester', value: clean(student?.semester) },
+      { label: 'Section', value: clean(student?.section) },
+      { label: 'Report Generated', value: new Date().toLocaleDateString('en-IN') },
+    ],
+    columns: ['Subject', 'Total Classes', 'Present', 'Absent', 'Percentage'],
+    rows: [
+      ...subjectRows,
+      ['OVERALL', String(totalClasses), String(totalPresent), String(totalAbsent), `${overallPct}%`],
+    ],
+    signatories: [
+      { name: '', designation: 'Class Advisor' },
+      { name: '', designation: 'HOD' },
+    ],
+    filename: `Attendance_Report_${clean(student?.name)}`,
+    footerId: attendanceRef,
+  };
+
+  return downloadOfficialFile(format, payload);
+};
+
+/* ------------------------------------------------------------------ */
+/*  4. Timetable Document                                              */
+/* ------------------------------------------------------------------ */
+
+export const downloadTimetableDocument = (format, { settings, department, year, slots, days, timeSlots }) => {
+  const timetableRef = generateRef('TT');
+  const daysList = days || [];
+  const timeSlotList = timeSlots || [];
+  const allSlots = slots || [];
+  const currentYear = new Date().getFullYear();
+
+  const payload = {
+    settings,
+    title: 'CLASS TIMETABLE',
+    subtitle: `${clean(department)} — Year ${clean(year)}`,
+    details: [
+      { label: 'Department', value: clean(department) },
+      { label: 'Year', value: clean(year) },
+      { label: 'Academic Session', value: `${currentYear}-${String(currentYear + 1).slice(2)}` },
+      { label: 'Generated On', value: new Date().toLocaleDateString('en-IN') },
+    ],
+    columns: ['Day', ...timeSlotList],
+    rows: daysList.map((day) =>
+      [
+        day,
+        ...timeSlotList.map((_, slotIndex) => {
+          const match = allSlots.find(
+            (s) => clean(s.day) === clean(day) && Number(s.slot) === slotIndex,
+          );
+          if (match) {
+            const subj = clean(match.subject);
+            const room = clean(match.room);
+            return subj ? (room ? `${subj} (${room})` : subj) : '-';
+          }
+          return '-';
+        }),
+      ],
+    ),
+    signatories: [
+      { name: '', designation: 'HOD' },
+      { name: settings?.principalName || '', designation: 'Principal' },
+    ],
+    filename: `Timetable_${clean(department)}_Year${clean(year)}`,
+    footerId: timetableRef,
+  };
+
+  return downloadOfficialFile(format, payload);
+};
+
+/* ------------------------------------------------------------------ */
+/*  5. Seating Document                                                */
+/* ------------------------------------------------------------------ */
+
+export const downloadSeatingDocument = (format, { settings, exam, allocations, classrooms }) => {
+  const seatingRef = generateRef('SEA');
+  const allocationList = allocations || [];
+
+  // Count unique departments from allocations
+  const uniqueDepts = new Set(allocationList.map((a) => clean(a.dept)).filter(Boolean));
+
+  const payload = {
+    settings,
+    title: 'EXAMINATION SEATING ARRANGEMENT',
+    subtitle: `${clean(exam?.name)} | ${clean(exam?.date)}`,
+    details: [
+      { label: 'Exam', value: clean(exam?.name) },
+      { label: 'Date', value: clean(exam?.date) },
+      { label: 'Total Students', value: String(allocationList.length) },
+      { label: 'Halls Used', value: Array.isArray(exam?.halls) ? exam.halls.join(', ') : clean(exam?.halls) },
+      { label: 'Departments', value: String(uniqueDepts.size) },
+    ],
+    columns: ['S.No', 'Roll Number', 'Department', 'Row', 'Column', 'Status'],
+    rows: allocationList.map((a, idx) => [
+      String(idx + 1),
+      clean(a.student),
+      clean(a.dept),
+      `R${(Number(a.row) || 0) + 1}`,
+      `C${(Number(a.col) || 0) + 1}`,
+      a.absent ? 'Absent' : 'Allocated',
+    ]),
+    signatories: [
+      { name: '', designation: 'Controller of Examinations' },
+    ],
+    filename: `Seating_${clean(exam?.name)}`,
+    footerId: seatingRef,
+  };
+
+  return downloadOfficialFile(format, payload);
+};
+
+/* ------------------------------------------------------------------ */
+/*  6. Official Letter                                                 */
+/* ------------------------------------------------------------------ */
+
+export const downloadOfficialLetter = (format, { settings, subject, body, recipientName, recipientAddress, signatory, designation }) => {
+  const refNo = generateRef('LTR');
+
+  const payload = {
+    settings,
+    title: 'OFFICIAL COMMUNICATION',
+    details: [
+      { label: 'Ref No', value: refNo },
+      { label: 'Date', value: new Date().toLocaleDateString('en-IN') },
+      { label: 'To', value: clean(recipientName) },
+      { label: 'Address', value: clean(recipientAddress || '') },
+    ],
+    sections: [
+      {
+        heading: `Subject: ${clean(subject)}`,
+        lines: [],
+      },
+      {
+        heading: '',
+        lines: (body || '').split('\n').filter(Boolean),
+      },
+    ],
+    signatories: [
+      {
+        name: signatory || settings?.principalName || '',
+        designation: designation || 'Principal',
+      },
+    ],
+    filename: `Letter_${clean(subject)}`,
+    footerId: refNo,
+  };
+
+  return downloadOfficialFile(format, payload);
+};
