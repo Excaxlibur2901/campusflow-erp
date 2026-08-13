@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import TimetablePage from './pages/TimetablePage';
 import ExamSeatingPage from './pages/ExamSeatingPage';
 import AttendancePage from './pages/AttendancePage';
+import MarksPage from './pages/MarksPage';
 import DepartmentsPage from './pages/DepartmentsPage';
 import FacultyPage from './pages/FacultyPage';
 import StudentsPage from './pages/StudentsPage';
@@ -20,7 +21,9 @@ import NotificationsPage from './pages/NotificationsPage';
 import AuditLogsPage from './pages/AuditLogsPage';
 import SettingsPage from './pages/SettingsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import VerificationPage from './pages/VerificationPage';
 import { CheckCircle, AlertTriangle, Info } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
 function ToastContainer() {
   const { toasts } = useData();
@@ -43,6 +46,19 @@ function AppLayout() {
   const { user } = useAuth();
   const { setupDone, dataLoading, dataError } = useData();
   const [collapsed, setCollapsed] = useState(false);
+  const location = useLocation();
+
+  // Public document verification page (accessible without login)
+  if (location.pathname.startsWith('/verify')) {
+    return (
+      <Routes>
+        <Route path="/verify/document/:documentId" element={<VerificationPage />} />
+        <Route path="/verify/document" element={<VerificationPage />} />
+        <Route path="/verify/:documentId" element={<VerificationPage />} />
+        <Route path="*" element={<VerificationPage />} />
+      </Routes>
+    );
+  }
 
   if (dataLoading) {
     return (
@@ -73,6 +89,7 @@ function AppLayout() {
             <Route path="/timetable" element={<TimetablePage />} />
             <Route path="/exams" element={<ExamSeatingPage />} />
             <Route path="/attendance" element={<AttendancePage />} />
+            <Route path="/marks" element={<MarksPage />} />
             <Route path="/departments" element={<DepartmentsPage />} />
             <Route path="/faculty" element={<FacultyPage />} />
             <Route path="/students" element={<StudentsPage />} />

@@ -130,8 +130,8 @@ router.post('/:id/revoke', authenticateUser, requireRole('SUPER_ADMIN', 'PRINCIP
   } catch (err) { next(err); }
 });
 
-/* ── GET /api/verify/document/:documentId (PUBLIC) ───────────────── */
-router.get('/verify/:documentId', optionalAuth, async (req, res, next) => {
+/* ── GET /api/documents/verify/:documentId or /api/verify/document/:documentId (PUBLIC) ───────────────── */
+router.get(['/verify/:documentId', '/verify/document/:documentId', '/document/:documentId'], optionalAuth, async (req, res, next) => {
   try {
     const result = await pool.query(
       `SELECT d.id, d.document_number, d.document_type, d.title, d.status,

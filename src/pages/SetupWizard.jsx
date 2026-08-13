@@ -14,10 +14,16 @@ const STEPS = [
 ];
 
 export default function SetupWizard() {
-  const { user } = useAuth();
-  const { setSettings, setDepartments, setClassroomsList, completeSetup, showToast, addAudit } = useData();
+  const { runSetup } = useAuth();
+  const { setSettings, showToast } = useData();
   const [step, setStep] = useState(0);
+  const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Super Admin Account Data
+  const [adminName, setAdminName] = useState('System Administrator');
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
 
   // All institution data
   const [inst, setInst] = useState({
@@ -50,28 +56,51 @@ export default function SetupWizard() {
   const updateRoomRow = (i, field, val) => setRooms(prev => prev.map((r, idx) => idx === i ? { ...r, [field]: val } : r));
 
   const canProceed = () => {
-    if (step === 1) return inst.institutionName.trim().length > 0;
+    if (step === 1) {
+      return (
+        inst.institutionName.trim().length > 0 &&
+        adminName.trim().length > 0 &&
+        adminEmail.trim().length > 0 &&
+        adminPassword.length >= 8
+      );
+    }
     if (step === 3) return depts.some(d => d.code.trim() && d.name.trim());
     return true;
   };
 
-  const handleFinish = () => {
-    setSettings(prev => ({ ...prev, ...inst }));
-    const validDepts = depts.filter(d => d.code.trim() && d.name.trim()).map((d, i) => ({
-      id: `d${Date.now()}_${i}`, code: d.code.toUpperCase(), name: d.name, hod: d.hod || 'Not Assigned',
-      active: true, faculty: 0, students: 0,
-    }));
-    setDepartments(validDepts);
-    const roomTypeLabel = { lecture: 'Lecture Hall', lab: 'Computer Lab', seminar: 'Seminar Hall', exam: 'Exam Hall', drawing: 'Drawing Hall' };
-    const validRooms = rooms.filter(r => r.code.trim() && r.name.trim()).map((r, i) => ({
-      id: `r${Date.now()}_${i}`, code: r.code.toUpperCase(), name: r.name,
-      type: roomTypeLabel[r.type] || r.type,
-      capacity: Number(r.capacity), floor: Number(r.floor), dept: null,
-    }));
-    setClassroomsList(validRooms);
-    addAudit(user?.email || 'admin', 'CREATE', 'System', 'Initial Setup Completed');
-    showToast('Setup complete! Welcome to CampusFlow ERP');
-    completeSetup();
+  const handleFinish = async () => {
+    if (!inst.institutionName.trim()) {
+      showToast('Institution name is required.', 'error');
+      return;
+    }
+    if (!adminEmail.trim() || !adminPassword || adminPassword.length < 8) {
+      showToast('Super Admin email and password (min 8 chars) are required.', 'error');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      const result = await runSetup({
+        institutionName: inst.institutionName.trim(),
+        adminName: adminName.trim() || 'System Administrator',
+        adminEmail: adminEmail.trim(),
+        adminPassword,
+      });
+
+      if (!result.success) {
+        showToast(result.error || 'Setup failed.', 'error');
+        setLoading(false);
+        return;
+      }
+
+      setSettings(prev => ({ ...prev, ...inst, principalName: inst.principalName || adminName }));
+      showToast('Setup complete! Welcome to CampusFlow ERP.');
+    } catch {
+      showToast('Network error completing setup.', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -141,6 +170,26 @@ export default function SetupWizard() {
                     <label className="form-label">Institution Name *</label>
                     <input className="form-input" placeholder="e.g., Vishwakarma Institute of Technology" value={inst.institutionName} onChange={e => setInst({ ...inst, institutionName: e.target.value })} />
                   </div>
+
+                  {/* Super Admin Account Details */}
+                  <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-main)', border: '1px solid var(--border)', marginBottom: 16 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: 'var(--primary)' }}>🔑 Initial Super Admin Account</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Admin Name *</label>
+                        <input className="form-input" placeholder="e.g. Dr. System Administrator" value={adminName} onChange={e => setAdminName(e.target.value)} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label className="form-label">Admin Email *</label>
+                        <input className="form-input" type="email" placeholder="admin@college.edu" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label">Admin Password (min 8 chars) *</label>
+                      <input className="form-input" type="password" placeholder="Enter secure password" value={adminPassword} onChange={e => setAdminPassword(e.target.value)} />
+                    </div>
+                  </div>
+
                   <div className="form-group">
                     <label className="form-label">University Affiliation</label>
                     <input className="form-input" placeholder="e.g., Savitribai Phule Pune University" value={inst.affiliation} onChange={e => setInst({ ...inst, affiliation: e.target.value })} />
@@ -312,8 +361,12 @@ export default function SetupWizard() {
               {step === 0 ? "Let's Get Started" : 'Next Step'} <ChevronRight size={16} />
             </button>
           ) : (
-            <button className="btn btn-primary" onClick={handleFinish} style={{ background: 'linear-gradient(135deg, var(--success), #16A34A)' }}>
-              <Check size={16} /> Launch CampusFlow
+            <button className="btn btn-primary" onClick={handleFinish} disabled={loading} style={{ background: 'linear-gradient(135deg, var(--success), #16A34A)' }}>
+              {loading ? (
+                <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Creating Institution...</>
+              ) : (
+                <><Check size={16} /> Launch CampusFlow</>
+              )}
             </button>
           )}
         </div>

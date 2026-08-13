@@ -23,7 +23,6 @@ export default function LoginPage() {
   // Register form state
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
-  const [regRole, setRegRole] = useState('Student');
   const [regDept, setRegDept] = useState('CSE');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
@@ -113,7 +112,7 @@ export default function LoginPage() {
         fullName: regName.trim(),
         email: regEmail.trim(),
         password: regPassword,
-        role: accountType === 'institution' ? 'SUPER_ADMIN' : regRole,
+        role: accountType === 'institution' ? 'SUPER_ADMIN' : 'STUDENT',
         department: regDept,
         institutionId: accountType === 'user' ? regInstId || undefined : undefined,
         institutionName: accountType === 'institution' ? regInstName.trim() : undefined,
@@ -542,15 +541,14 @@ export default function LoginPage() {
               {accountType === 'user' && (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                   <div className="form-group">
-                    <label className="form-label">Institutional Role</label>
-                    <select className="form-select" value={regRole} onChange={(e) => setRegRole(e.target.value)}>
-                      <option value="Student">Student</option>
-                      <option value="Faculty">Faculty</option>
-                      <option value="HOD">HOD</option>
-                      <option value="Exam Cell">Exam Cell</option>
-                      <option value="Principal">Principal</option>
-                      <option value="Super Admin">Super Admin</option>
-                    </select>
+                    <label className="form-label">Role</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value="Student"
+                      disabled
+                      style={{ background: 'var(--bg-main)', cursor: 'not-allowed', color: 'var(--text-muted)' }}
+                    />
                   </div>
                   <div className="form-group">
                     <label className="form-label">Department</label>

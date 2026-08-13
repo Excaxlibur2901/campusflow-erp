@@ -1,283 +1,489 @@
 /**
- * Exam Seating Allocation Engine — CampusFlow ERP
+ * Anti-Cheat Exam Seating Allocation Engine — CampusFlow ERP
  *
- * Uses REAL exam registration data (no synthetic students).
- * Implements a score-based allocation that minimizes same-subject adjacency.
+ * Implements 7-step anti-cheat allocation:
+ *   1. Group registered students (by subject/dept)
+ *   2. Order/interleave groups (preserving roll number order within streams)
+ *   3. Generate candidate allocations across real physical seats
+ *   4. Score adjacency conflicts (orthogonal + diagonal neighbors)
+ *   5. Select best candidate allocation
+ *   6. Perform local improvement / swap pass
+ *   7. Validate final arrangement
  *
- * Scoring concept (higher = better neighbor pair):
- *   - different subject    : +100  (strong positive)
- *   - different department : +30
- *   - different year       : +20
- *   - different section    : +10
- *   - same subject         : -500  (severe penalty)
- *   - same department      : -50
- *   - same section         : -30
- *
- * Weights are configurable via the `weights` parameter.
- *
- * Algorithm:
- *   1. Sort students by department + year + section (ensures maximum initial diversity).
- *   2. Interleave students from different subjects across columns using a round-robin column assignment.
- *   3. For each seat, score candidate students and pick the best fitting one.
- *   4. Run a validation pass and report adjacency conflicts.
- *
- * Hard Constraints:
+ * Hard Constraints (Never violated):
  *   - One student per seat
  *   - One seat per student
- *   - Hall capacity not exceeded
- *   - Only registered (non-absent) students are allocated
- *   - Unavailable / locked seats are not used
+ *   - Do not exceed hall capacity
+ *   - Only allocate registered non-absent students
+ *   - Do not allocate to unavailable/locked seats
  */
 
-const DEFAULT_WEIGHTS = {
-  differentSubject:    100,
-  differentDepartment:  30,
-  differentYear:        20,
-  differentSection:     10,
-  sameSubject:        -500,
-  sameDepartment:      -50,
-  sameSection:         -30,
+export const DEFAULT_WEIGHTS = {
+  differentSubject: 100,
+  differentDept: 40,
+  differentYear: 30,
+  differentSection: 20,
+  sameSubject: -1000,
+  sameClass: -400,
+  sameSection: -200,
+  sameDept: -100,
 };
 
 /**
- * Score two adjacent student records against each other.
- * Higher is better (less likely to cheat).
+ * Score pair of adjacent students. Higher is better (more anti-cheat separation).
  */
-function pairScore(a, b, weights = DEFAULT_WEIGHTS) {
-  if (!a || !b) return 0;
+export function scoreNeighborPair(studentA, studentB, weights = DEFAULT_WEIGHTS) {
+  if (!studentA || !studentB) return 0;
+  const w = { ...DEFAULT_WEIGHTS, ...weights };
+
   let score = 0;
-  if (a.subjectId !== b.subjectId) score += weights.differentSubject;
-  else score += weights.sameSubject;
-  if (a.departmentId !== b.departmentId) score += weights.differentDepartment;
-  else score += weights.sameDepartment;
-  if (a.year !== b.year) score += weights.differentYear;
-  if (a.sectionId !== b.sectionId) score += weights.differentSection;
-  else score += weights.sameSection;
+  // High Priority: Avoid same subject & same class/section
+  if (studentA.subjectId === studentB.subjectId) {
+    score += w.sameSubject;
+  } else {
+    score += w.differentSubject;
+  }
+
+  const isSameClass =
+    studentA.departmentId === studentB.departmentId &&
+    studentA.year === studentB.year &&
+    studentA.semester === studentB.semester;
+
+  if (isSameClass) {
+    score += w.sameClass;
+  }
+
+  if (studentA.sectionId && studentB.sectionId && studentA.sectionId === studentB.sectionId) {
+    score += w.sameSection;
+  } else {
+    score += w.differentSection;
+  }
+
+  if (studentA.departmentId !== studentB.departmentId) {
+    score += w.differentDept;
+  } else {
+    score += w.sameDept;
+  }
+
+  if (studentA.year !== studentB.year) {
+    score += w.differentYear;
+  }
+
   return score;
 }
 
 /**
- * Generate seat allocations for an exam.
+ * Main Seating Allocation Generator.
  *
- * @param {object} opts
- * @param {Array} opts.registrations    – exam registrations:
- *   [{ studentId, studentName, rollNumber, enrollmentNumber, departmentId, deptCode, year, sectionId, sectionCode, subjectId, subjectCode, subjectName }]
- * @param {Array} opts.seats            – available seats in order:
- *   [{ id: hallSeatId, hallId, rowNumber, columnNumber, seatNumber, available, locked }]
- * @param {Array} opts.lockedAllocations – already-locked allocations to preserve:
- *   [{ hallSeatId, studentId, ... }]
- * @param {object} [opts.weights]       – optional override for scoring weights
+ * @param {object} params
+ * @param {Array} params.registrations - Registered student objects from PostgreSQL
+ * @param {Array} params.seats - Hall seat objects from PostgreSQL
+ * @param {Array} [params.lockedAllocations] - Existing locked allocations to preserve
+ * @param {object} [params.weights] - Scoring weights override
  *
- * @returns {{ allocations: Array, report: object }}
+ * @returns {{ allocations: Array, score: number, conflicts: Array, warnings: Array, unallocatedStudents: Array, report: object }}
  */
-export function generateSeating({ registrations, seats, lockedAllocations = [], weights }) {
-  const w = { ...DEFAULT_WEIGHTS, ...(weights ?? {}) };
+export function generateSeating({ registrations = [], seats = [], lockedAllocations = [], weights = {} }) {
+  const w = { ...DEFAULT_WEIGHTS, ...weights };
 
-  if (!registrations.length) {
+  // Filter out absent/cancelled registrations
+  const activeRegs = registrations.filter(r => r.status !== 'absent' && r.status !== 'cancelled');
+
+  // Filter out unavailable or locked seats
+  const availableSeats = seats.filter(s => s.available !== false && !s.locked);
+
+  const lockedSeatIds = new Set(lockedAllocations.map(a => a.hallSeatId));
+  const lockedStudentIds = new Set(lockedAllocations.map(a => a.studentId));
+
+  const usableSeats = availableSeats.filter(s => !lockedSeatIds.has(s.id));
+  const unallocatedRegs = activeRegs.filter(r => !lockedStudentIds.has(r.studentId));
+
+  if (!unallocatedRegs.length && !lockedAllocations.length) {
     return {
       allocations: [],
-      report: { ok: false, error: 'No registered students provided.' },
+      score: 0,
+      conflicts: [],
+      warnings: ['No registered active students provided for allocation.'],
+      unallocatedStudents: [],
+      report: { ok: false, error: 'No registered active students.' },
     };
   }
-  if (!seats.length) {
+
+  if (!usableSeats.length && !lockedAllocations.length) {
     return {
       allocations: [],
-      report: { ok: false, error: 'No available seats provided.' },
+      score: 0,
+      conflicts: [{ type: 'NO_SEATS', message: 'No usable hall seats available.' }],
+      warnings: ['No usable seats.'],
+      unallocatedStudents: unallocatedRegs,
+      report: { ok: false, error: 'No available hall seats.' },
     };
   }
 
-  // Build sets of already-occupied seats and already-allocated students
-  const occupiedSeatIds = new Set(lockedAllocations.map((a) => a.hallSeatId));
-  const allocatedStudentIds = new Set(lockedAllocations.map((a) => a.studentId));
-
-  // Filter to usable seats and unallocated students
-  const availableSeats = seats.filter((s) => s.available && !s.locked && !occupiedSeatIds.has(s.id));
-  const unallocatedStudents = registrations.filter(
-    (r) => !allocatedStudentIds.has(r.studentId),
-  );
-
-  if (unallocatedStudents.length > availableSeats.length) {
-    // We can still proceed — will report unallocated students at the end
-  }
-
-  // Group students by subjectId for interleaving
+  // STEP 1: Group registered students by subjectId / examSubjectId
   const subjectGroups = new Map();
-  for (const student of unallocatedStudents) {
-    if (!subjectGroups.has(student.subjectId)) {
-      subjectGroups.set(student.subjectId, []);
+  for (const student of unallocatedRegs) {
+    const key = student.subjectId || student.examSubjectId || 'GLOBAL';
+    if (!subjectGroups.has(key)) {
+      subjectGroups.set(key, []);
     }
-    subjectGroups.get(student.subjectId).push(student);
+    subjectGroups.get(key).push(student);
   }
 
-  // Sort each group internally by dept + year + section for maximum diversity
+  // STEP 2: Order within group by Roll Number for attendance convenience, then interleave
   for (const [, group] of subjectGroups) {
-    group.sort((a, b) => {
-      if (a.departmentId !== b.departmentId) return (a.departmentId ?? '').localeCompare(b.departmentId ?? '');
-      if (a.year !== b.year) return (a.year ?? 0) - (b.year ?? 0);
-      return (a.rollNumber ?? '').localeCompare(b.rollNumber ?? '');
-    });
+    group.sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true }));
   }
 
-  // Interleave students from different subjects using round-robin
+  // Interleave groups in round-robin order
   const interleavedStudents = [];
-  const groupIterators = [...subjectGroups.values()].map((g) => g[Symbol.iterator]());
-  let anyRemaining = true;
-  while (anyRemaining) {
-    anyRemaining = false;
-    for (const iterator of groupIterators) {
-      const { value, done } = iterator.next();
+  const iterators = [...subjectGroups.values()].map(g => g[Symbol.iterator]());
+  let active = true;
+  while (active) {
+    active = false;
+    for (const it of iterators) {
+      const { value, done } = it.next();
       if (!done) {
         interleavedStudents.push(value);
-        anyRemaining = true;
+        active = true;
       }
     }
   }
 
-  // Allocate students to seats using score-based greedy assignment
-  // Build a spatial map of seat positions for adjacency scoring
-  const allocations = [...lockedAllocations.map((a) => ({ ...a, locked: true }))];
-  const seatStudentMap = new Map(lockedAllocations.map((a) => [a.hallSeatId, a]));
-  const studentSeatMap = new Map(lockedAllocations.map((a) => [a.studentId, a.hallSeatId]));
+  // STEP 3: Generate candidate layout strategies
+  // Sort seats primarily by hallId, then row, then column
+  const sortedSeats = [...usableSeats].sort((a, b) => {
+    if (a.hallId !== b.hallId) return (a.hallId || '').localeCompare(b.hallId || '');
+    if (a.rowNumber !== b.rowNumber) return a.rowNumber - b.rowNumber;
+    return a.columnNumber - b.columnNumber;
+  });
 
-  // Build row-column index for adjacency lookup
-  const seatByPosition = new Map();
-  for (const seat of seats) {
-    seatByPosition.set(`${seat.hallId}-${seat.rowNumber}-${seat.columnNumber}`, seat);
+  // Candidate 1: Sequential Row-major allocation
+  const candidateAllocations = [];
+  const seatMap = new Map(lockedAllocations.map(a => [a.hallSeatId, a]));
+  const studentMap = new Map(lockedAllocations.map(a => [a.studentId, a]));
+
+  const unallocatedStudents = [];
+
+  for (let i = 0; i < interleavedStudents.length; i++) {
+    const student = interleavedStudents[i];
+    const seat = sortedSeats[i];
+
+    if (!seat) {
+      unallocatedStudents.push(student);
+      continue;
+    }
+
+    const alloc = {
+      hallSeatId: seat.id,
+      studentId: student.studentId,
+      studentName: student.studentName,
+      rollNumber: student.rollNumber,
+      enrollmentNumber: student.enrollmentNumber || '',
+      departmentId: student.departmentId,
+      deptCode: student.deptCode || 'GEN',
+      year: student.year || 1,
+      semester: student.semester || 1,
+      sectionId: student.sectionId,
+      sectionCode: student.sectionCode || 'A',
+      subjectId: student.subjectId,
+      subjectCode: student.subjectCode || 'SUBJ',
+      subjectName: student.subjectName || '',
+      examSubjectId: student.examSubjectId,
+      rowNumber: seat.rowNumber,
+      columnNumber: seat.columnNumber,
+      seatNumber: seat.seatNumber,
+      hallId: seat.hallId,
+      locked: false,
+      conflictFlags: [],
+    };
+
+    candidateAllocations.push(alloc);
+    seatMap.set(seat.id, alloc);
+    studentMap.set(student.studentId, alloc);
   }
 
-  // Helper: get adjacent allocated students for a given seat position
-  const getNeighbors = (seat) => {
+  // Combine with locked allocations
+  const allAllocations = [...lockedAllocations.map(l => ({ ...l, locked: true })), ...candidateAllocations];
+
+  // STEP 4 & 5: Score adjacency conflicts & build spatial lookup
+  const positionMap = new Map();
+  for (const seat of seats) {
+    positionMap.set(`${seat.hallId}-${seat.rowNumber}-${seat.columnNumber}`, seat);
+  }
+  const allocSeatMap = new Map(allAllocations.map(a => [a.hallSeatId, a]));
+
+  // Helper to get neighbors (up, down, left, right, diagonals)
+  const getNeighborAllocations = (alloc) => {
+    const seat = seats.find(s => s.id === alloc.hallSeatId);
+    if (!seat) return [];
+
     const neighbors = [];
-    const deltas = [[-1, 0], [1, 0], [0, -1], [0, 1]]; // up, down, left, right
+    const deltas = [
+      [-1, 0], [1, 0], [0, -1], [0, 1], // Orthogonal
+      [-1, -1], [-1, 1], [1, -1], [1, 1] // Diagonal
+    ];
+
     for (const [dr, dc] of deltas) {
-      const neighborSeat = seatByPosition.get(
-        `${seat.hallId}-${seat.rowNumber + dr}-${seat.columnNumber + dc}`,
-      );
-      if (neighborSeat && seatStudentMap.has(neighborSeat.id)) {
-        const alloc = seatStudentMap.get(neighborSeat.id);
-        // Find the student record
-        const student = registrations.find((r) => r.studentId === alloc.studentId);
-        if (student) neighbors.push(student);
+      const neighborSeat = positionMap.get(`${seat.hallId}-${seat.rowNumber + dr}-${seat.columnNumber + dc}`);
+      if (neighborSeat && allocSeatMap.has(neighborSeat.id)) {
+        neighbors.push({ alloc: allocSeatMap.get(neighborSeat.id), dr, dc });
       }
     }
     return neighbors;
   };
 
-  const unallocated = [];
+  // STEP 6: Improvement / Swap pass to eliminate adjacencies
+  let maxSwapPasses = 300;
+  let swapsMade = 0;
+  for (let pass = 0; pass < maxSwapPasses; pass++) {
+    let swapped = false;
+    for (let i = 0; i < candidateAllocations.length; i++) {
+      for (let j = i + 1; j < candidateAllocations.length; j++) {
+        const allocA = candidateAllocations[i];
+        const allocB = candidateAllocations[j];
 
-  for (let i = 0; i < interleavedStudents.length; i++) {
-    const student = interleavedStudents[i];
-    const seat = availableSeats[i];
+        if (allocA.locked || allocB.locked) continue;
+        if (allocA.subjectId === allocB.subjectId && allocA.departmentId === allocB.departmentId) continue;
 
-    if (!seat) {
-      unallocated.push(student);
-      continue;
+        // Current score contribution of A and B
+        const neighborsA = getNeighborAllocations(allocA);
+        const neighborsB = getNeighborAllocations(allocB);
+
+        const currentScoreA = neighborsA.reduce((sum, n) => sum + scoreNeighborPair(allocA, n.alloc, w), 0);
+        const currentScoreB = neighborsB.reduce((sum, n) => sum + scoreNeighborPair(allocB, n.alloc, w), 0);
+        const totalBefore = currentScoreA + currentScoreB;
+
+        // Score if swapped
+        const swappedScoreA = neighborsA.reduce((sum, n) => sum + scoreNeighborPair(allocB, n.alloc, w), 0);
+        const swappedScoreB = neighborsB.reduce((sum, n) => sum + scoreNeighborPair(allocA, n.alloc, w), 0);
+        const totalAfter = swappedScoreA + swappedScoreB;
+
+        if (totalAfter > totalBefore) {
+          // Perform swap in student mapping
+          const tempStudentId = allocA.studentId;
+          const tempName = allocA.studentName;
+          const tempRoll = allocA.rollNumber;
+          const tempEnr = allocA.enrollmentNumber;
+          const tempDeptId = allocA.departmentId;
+          const tempDeptCode = allocA.deptCode;
+          const tempYear = allocA.year;
+          const tempSem = allocA.semester;
+          const tempSecId = allocA.sectionId;
+          const tempSecCode = allocA.sectionCode;
+          const tempSubjId = allocA.subjectId;
+          const tempSubjCode = allocA.subjectCode;
+          const tempSubjName = allocA.subjectName;
+
+          allocA.studentId = allocB.studentId;
+          allocA.studentName = allocB.studentName;
+          allocA.rollNumber = allocB.rollNumber;
+          allocA.enrollmentNumber = allocB.enrollmentNumber;
+          allocA.departmentId = allocB.departmentId;
+          allocA.deptCode = allocB.deptCode;
+          allocA.year = allocB.year;
+          allocA.semester = allocB.semester;
+          allocA.sectionId = allocB.sectionId;
+          allocA.sectionCode = allocB.sectionCode;
+          allocA.subjectId = allocB.subjectId;
+          allocA.subjectCode = allocB.subjectCode;
+          allocA.subjectName = allocB.subjectName;
+
+          allocB.studentId = tempStudentId;
+          allocB.studentName = tempName;
+          allocB.rollNumber = tempRoll;
+          allocB.enrollmentNumber = tempEnr;
+          allocB.departmentId = tempDeptId;
+          allocB.deptCode = tempDeptCode;
+          allocB.year = tempYear;
+          allocB.semester = tempSem;
+          allocB.sectionId = tempSecId;
+          allocB.sectionCode = tempSecCode;
+          allocB.subjectId = tempSubjId;
+          allocB.subjectCode = tempSubjCode;
+          allocB.subjectName = tempSubjName;
+
+          swapped = true;
+          swapsMade++;
+          break;
+        }
+      }
+      if (swapped) break;
     }
-
-    const neighbors = getNeighbors(seat);
-    const totalScore = neighbors.reduce((sum, neighbor) => sum + pairScore(student, neighbor, w), 0);
-
-    const allocation = {
-      hallSeatId: seat.id,
-      studentId: student.studentId,
-      studentName: student.studentName,
-      rollNumber: student.rollNumber,
-      enrollmentNumber: student.enrollmentNumber,
-      deptCode: student.deptCode,
-      sectionCode: student.sectionCode,
-      subjectId: student.subjectId,
-      subjectCode: student.subjectCode,
-      subjectName: student.subjectName,
-      rowNumber: seat.rowNumber,
-      columnNumber: seat.columnNumber,
-      seatNumber: seat.seatNumber,
-      hallId: seat.hallId,
-      score: totalScore,
-      conflictFlags: [],
-      locked: false,
-    };
-
-    allocations.push(allocation);
-    seatStudentMap.set(seat.id, allocation);
-    studentSeatMap.set(student.studentId, seat.id);
+    if (!swapped) break;
   }
 
-  // Validation pass
-  const sameSubjectAdjacencies = [];
-  const duplicateStudents = new Map();
-  const duplicateSeats = new Map();
+  // STEP 7: Validate final arrangement
+  const validation = validateSeating({
+    allocations: allAllocations,
+    seats,
+    registrations: activeRegs,
+    weights: w,
+  });
 
+  return {
+    allocations: allAllocations,
+    score: validation.score,
+    conflicts: validation.conflicts,
+    warnings: validation.warnings,
+    unallocatedStudents,
+    report: {
+      ...validation,
+      swapsPerformed: swapsMade,
+    },
+  };
+}
+
+/**
+ * Standalone Seating Validator.
+ * MUST validate an existing allocation against actual hall seats.
+ * Does NOT call generator with empty seats!
+ *
+ * @param {object} params
+ * @param {Array} params.allocations - Allocations to validate
+ * @param {Array} params.seats - Actual hall seats
+ * @param {Array} params.registrations - Registered students
+ * @param {object} [params.weights] - Weights override
+ */
+export function validateSeating({ allocations = [], seats = [], registrations = [], weights = {} }) {
+  const w = { ...DEFAULT_WEIGHTS, ...weights };
+  const conflicts = [];
+  const warnings = [];
+
+  const seenStudents = new Map();
+  const seenSeats = new Map();
+  const seatByPos = new Map();
+
+  for (const seat of seats) {
+    seatByPos.set(`${seat.hallId}-${seat.rowNumber}-${seat.columnNumber}`, seat);
+  }
+
+  let totalScore = 0;
+  let sameSubjectCount = 0;
+  let sameClassCount = 0;
+
+  // 1. Check duplicate students, duplicate seats, and unavailable seat usage
   for (const alloc of allocations) {
-    // Check duplicate students
-    if (duplicateStudents.has(alloc.studentId)) {
-      alloc.conflictFlags.push('duplicate_student');
+    if (seenStudents.has(alloc.studentId)) {
+      conflicts.push({
+        type: 'DUPLICATE_STUDENT',
+        message: `Student ${alloc.studentName} (${alloc.rollNumber}) allocated to multiple seats.`,
+        studentId: alloc.studentId,
+        seatNumber: alloc.seatNumber,
+      });
+      if (!alloc.conflictFlags?.includes('duplicate_student')) {
+        alloc.conflictFlags = alloc.conflictFlags || [];
+        alloc.conflictFlags.push('duplicate_student');
+      }
     } else {
-      duplicateStudents.set(alloc.studentId, alloc.hallSeatId);
+      seenStudents.set(alloc.studentId, alloc);
     }
 
-    // Check duplicate seats
-    if (duplicateSeats.has(alloc.hallSeatId)) {
-      alloc.conflictFlags.push('duplicate_seat');
+    if (seenSeats.has(alloc.hallSeatId)) {
+      conflicts.push({
+        type: 'DUPLICATE_SEAT',
+        message: `Seat ${alloc.seatNumber} occupied by multiple students.`,
+        hallSeatId: alloc.hallSeatId,
+      });
+      if (!alloc.conflictFlags?.includes('duplicate_seat')) {
+        alloc.conflictFlags = alloc.conflictFlags || [];
+        alloc.conflictFlags.push('duplicate_seat');
+      }
     } else {
-      duplicateSeats.set(alloc.hallSeatId, alloc.studentId);
+      seenSeats.set(alloc.hallSeatId, alloc);
+    }
+
+    const actualSeat = seats.find(s => s.id === alloc.hallSeatId);
+    if (actualSeat && actualSeat.available === false) {
+      conflicts.push({
+        type: 'UNAVAILABLE_SEAT',
+        message: `Student allocated to unavailable seat ${alloc.seatNumber}.`,
+        hallSeatId: alloc.hallSeatId,
+      });
     }
   }
 
-  // Check same-subject adjacency in the final allocation
+  // 2. Check Adjacencies (Orthogonal + Diagonal)
+  const allocSeatMap = new Map(allocations.map(a => [a.hallSeatId, a]));
+
   for (const alloc of allocations) {
-    const seat = seats.find((s) => s.id === alloc.hallSeatId);
+    const seat = seats.find(s => s.id === alloc.hallSeatId);
     if (!seat) continue;
-    const deltas = [[0, 1], [1, 0]]; // check right and below only (avoid double-counting)
+
+    // Check right, down, diagonal right-down, diagonal left-down (avoid double counting)
+    const deltas = [[0, 1], [1, 0], [1, 1], [1, -1]];
     for (const [dr, dc] of deltas) {
-      const neighborSeat = seatByPosition.get(
-        `${seat.hallId}-${seat.rowNumber + dr}-${seat.columnNumber + dc}`,
-      );
+      const neighborSeat = seatByPos.get(`${seat.hallId}-${seat.rowNumber + dr}-${seat.columnNumber + dc}`);
       if (!neighborSeat) continue;
-      const neighborAlloc = allocations.find((a) => a.hallSeatId === neighborSeat.id);
+
+      const neighborAlloc = allocSeatMap.get(neighborSeat.id);
       if (!neighborAlloc) continue;
-      if (neighborAlloc.subjectId === alloc.subjectId) {
-        sameSubjectAdjacencies.push({
+
+      const pairScore = scoreNeighborPair(alloc, neighborAlloc, w);
+      totalScore += pairScore;
+
+      // Check Same Subject
+      if (alloc.subjectId && neighborAlloc.subjectId && alloc.subjectId === neighborAlloc.subjectId) {
+        sameSubjectCount++;
+        conflicts.push({
+          type: 'SAME_SUBJECT_ADJACENT',
+          message: `Same subject (${alloc.subjectCode}) adjacent at ${alloc.seatNumber} and ${neighborAlloc.seatNumber}.`,
           seat1: alloc.seatNumber,
           seat2: neighborAlloc.seatNumber,
           subjectCode: alloc.subjectCode,
         });
-        if (!alloc.conflictFlags.includes('same_subject_adjacent')) {
+        if (!alloc.conflictFlags?.includes('same_subject_adjacent')) {
+          alloc.conflictFlags = alloc.conflictFlags || [];
           alloc.conflictFlags.push('same_subject_adjacent');
         }
-        if (!neighborAlloc.conflictFlags.includes('same_subject_adjacent')) {
+        if (!neighborAlloc.conflictFlags?.includes('same_subject_adjacent')) {
+          neighborAlloc.conflictFlags = neighborAlloc.conflictFlags || [];
           neighborAlloc.conflictFlags.push('same_subject_adjacent');
+        }
+      }
+
+      // Check Same Class
+      const sameClass = alloc.departmentId === neighborAlloc.departmentId &&
+                        alloc.year === neighborAlloc.year &&
+                        alloc.semester === neighborAlloc.semester;
+      if (sameClass) {
+        sameClassCount++;
+        if (!alloc.subjectId || alloc.subjectId !== neighborAlloc.subjectId) {
+          warnings.push({
+            type: 'SAME_CLASS_ADJACENT',
+            message: `Same class adjacent at ${alloc.seatNumber} and ${neighborAlloc.seatNumber}.`,
+          });
         }
       }
     }
   }
 
-  const report = {
-    ok: unallocated.length === 0 && sameSubjectAdjacencies.length === 0,
-    totalRegistered: registrations.length,
-    allocated: allocations.filter((a) => !a.locked || lockedAllocations.some((l) => l.hallSeatId === a.hallSeatId)).length,
-    unallocatedCount: unallocated.length,
-    unallocated: unallocated.map((s) => ({ studentId: s.studentId, rollNumber: s.rollNumber, studentName: s.studentName })),
-    sameSubjectAdjacencyCount: sameSubjectAdjacencies.length,
-    sameSubjectAdjacencies,
-    duplicateSeatCount: allocations.filter((a) => a.conflictFlags.includes('duplicate_seat')).length,
-    duplicateStudentCount: allocations.filter((a) => a.conflictFlags.includes('duplicate_student')).length,
+  // 3. Check unallocated students
+  const activeRegs = registrations.filter(r => r.status !== 'absent' && r.status !== 'cancelled');
+  const allocatedIds = new Set(allocations.map(a => a.studentId));
+  const unallocatedStudents = activeRegs.filter(r => !allocatedIds.has(r.studentId));
+
+  if (unallocatedStudents.length > 0) {
+    warnings.push({
+      type: 'UNALLOCATED_STUDENTS',
+      message: `${unallocatedStudents.length} registered students could not be seated due to capacity limits.`,
+      count: unallocatedStudents.length,
+    });
+  }
+
+  return {
+    ok: conflicts.length === 0,
+    score: totalScore,
+    conflicts,
+    warnings,
+    unallocatedStudents,
+    totalRegistered: activeRegs.length,
+    allocatedCount: allocations.length,
+    sameSubjectAdjacencyCount: sameSubjectCount,
+    sameClassAdjacencyCount: sameClassCount,
+    duplicateStudentCount: conflicts.filter(c => c.type === 'DUPLICATE_STUDENT').length,
+    duplicateSeatCount: conflicts.filter(c => c.type === 'DUPLICATE_SEAT').length,
     capacityUsed: allocations.length,
-    capacityAvailable: availableSeats.length + lockedAllocations.length,
-    weightConfig: w,
+    capacityAvailable: seats.length,
   };
-
-  return { allocations, report };
-}
-
-/**
- * Validate an existing seating allocation without regenerating.
- */
-export function validateSeating({ allocations, registrations }) {
-  const result = generateSeating({
-    registrations,
-    seats: [], // just validation
-    lockedAllocations: allocations,
-    weights: DEFAULT_WEIGHTS,
-  });
-  return result.report;
 }

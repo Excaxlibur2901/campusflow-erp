@@ -1,50 +1,138 @@
-import { useState, useMemo } from 'react';
-import { useData } from '../context/DataContext';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Building, Plus, Edit, Trash2, Users, GraduationCap, X } from 'lucide-react';
 
 export default function DepartmentsPage() {
-  const { user } = useAuth();
-  const { departments, addDepartment, updateDepartment, deleteDepartment, facultyList } = useData();
+  const { getAccessToken } = useAuth();
+  const [departments, setDepartments] = useState([]);
+  const [facultyList, setFacultyList] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingDept, setEditingDept] = useState(null);
   const [search, setSearch] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [form, setForm] = useState({ code: '', name: '', hod: '' });
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const loadData = useCallback(async () => {
+    try {
+      const token = await getAccessToken();
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const [deptRes, facRes] = await Promise.all([
+        fetch('/api/departments', { headers }),
+        fetch('/api/faculty?limit=200', { headers }),
+      ]);
+
+      if (deptRes.ok) {
+        const data = await deptRes.json();
+        setDepartments(data.map(d => ({
+          id: d.id,
+          code: d.code,
+          name: d.name,
+          hod: d.hod_name || 'Not Assigned',
+          faculty: d.faculty_count || 0,
+          students: d.student_count || 0,
+          active: d.active !== false,
+        })));
+      }
+
+      if (facRes.ok) {
+        const facData = await facRes.json();
+        setFacultyList((facData.data || facData).map(f => ({
+          id: f.id,
+          name: f.full_name || f.name,
+          dept: f.dept_code || '',
+        })));
+      }
+    } catch {
+      // Best effort load
+    } finally {
+      setLoading(false);
+    }
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const filtered = useMemo(() =>
     departments.filter(d =>
-      d.name.toLowerCase().includes(search.toLowerCase()) ||
-      d.code.toLowerCase().includes(search.toLowerCase()) ||
-      d.hod.toLowerCase().includes(search.toLowerCase())
+      (d.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (d.code || '').toLowerCase().includes(search.toLowerCase()) ||
+      (d.hod || '').toLowerCase().includes(search.toLowerCase())
     ), [departments, search]
   );
 
   const openAdd = () => {
     setEditingDept(null);
     setForm({ code: '', name: '', hod: '' });
+    setErrorMsg('');
     setShowModal(true);
   };
 
   const openEdit = (d) => {
     setEditingDept(d);
-    setForm({ code: d.code, name: d.name, hod: d.hod });
+    setForm({ code: d.code, name: d.name, hod: d.hod || '' });
+    setErrorMsg('');
     setShowModal(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.code.trim() || !form.name.trim()) return;
-    if (editingDept) {
-      updateDepartment(editingDept.id, form, user?.email);
-    } else {
-      addDepartment(form, user?.email);
+    setErrorMsg('');
+    try {
+      const token = await getAccessToken();
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      };
+
+      if (editingDept) {
+        const res = await fetch(`/api/departments/${editingDept.id}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({ code: form.code, name: form.name }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          setErrorMsg(err.error || 'Failed to update department.');
+          return;
+        }
+      } else {
+        const res = await fetch('/api/departments', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ code: form.code, name: form.name }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          setErrorMsg(err.error || 'Failed to create department.');
+          return;
+        }
+      }
+
+      setShowModal(false);
+      await loadData();
+    } catch {
+      setErrorMsg('Network error. Please try again.');
     }
-    setShowModal(false);
   };
 
-  const handleDelete = (id) => {
-    deleteDepartment(id, user?.email);
-    setConfirmDelete(null);
+  const handleDelete = async (id) => {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`/api/departments/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setConfirmDelete(null);
+        await loadData();
+      }
+    } catch {
+      // Delete error handling
+    }
   };
 
   return (
@@ -61,7 +149,13 @@ export default function DepartmentsPage() {
           </div>
         </div>
       </div>
-      {filtered.length === 0 ? (
+
+      {loading ? (
+        <div className="empty-state">
+          <div className="spinner" style={{ width: 32, height: 32, margin: '0 auto 16px' }} />
+          <p>Loading departments from database...</p>
+        </div>
+      ) : filtered.length === 0 ? (
         <div className="empty-state"><Building size={48} /><h3>No departments found</h3><p>Try adjusting your search or add a new department.</p></div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
@@ -95,6 +189,11 @@ export default function DepartmentsPage() {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header"><h3>{editingDept ? 'Edit' : 'Add'} Department</h3><button className="btn btn-ghost" onClick={() => setShowModal(false)}>✕</button></div>
             <div className="modal-body">
+              {errorMsg && (
+                <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--error)', borderRadius: 6, color: 'var(--error)', fontSize: 13, marginBottom: 12 }}>
+                  {errorMsg}
+                </div>
+              )}
               <div className="form-group"><label className="form-label">Department Code *</label><input className="form-input" placeholder="e.g., CSE" value={form.code} onChange={e => setForm({ ...form, code: e.target.value.toUpperCase() })} /></div>
               <div className="form-group"><label className="form-label">Department Name *</label><input className="form-input" placeholder="e.g., Computer Science & Engineering" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
               <div className="form-group"><label className="form-label">Head of Department</label>

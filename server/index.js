@@ -4,23 +4,24 @@ import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
-import { getState, initDatabase, patchState, pool, resetState } from './db.js';
+import { initDatabase, pool } from './db.js';
 import { runMigrations } from './migrations.js';
-import { authenticateUser, requireRole } from './middleware/auth.js';
 
 // Route modules
-import authRoutes       from './routes/auth.js';
-import departmentRoutes from './routes/departments.js';
-import studentRoutes    from './routes/students.js';
-import facultyRoutes    from './routes/faculty.js';
-import subjectRoutes    from './routes/subjects.js';
-import classroomRoutes  from './routes/classrooms.js';
-import timetableRoutes  from './routes/timetable.js';
-import examRoutes       from './routes/exams.js';
-import attendanceRoutes from './routes/attendance.js';
-import marksRoutes      from './routes/marks.js';
-import documentRoutes   from './routes/documents.js';
-import auditRoutes      from './routes/audit.js';
+import authRoutes        from './routes/auth.js';
+import institutionRoutes from './routes/institutions.js';
+import academicRoutes    from './routes/academic.js';
+import departmentRoutes  from './routes/departments.js';
+import studentRoutes     from './routes/students.js';
+import facultyRoutes     from './routes/faculty.js';
+import subjectRoutes     from './routes/subjects.js';
+import classroomRoutes   from './routes/classrooms.js';
+import timetableRoutes   from './routes/timetable.js';
+import examRoutes        from './routes/exams.js';
+import attendanceRoutes  from './routes/attendance.js';
+import marksRoutes       from './routes/marks.js';
+import documentRoutes    from './routes/documents.js';
+import auditRoutes       from './routes/audit.js';
 
 const app = express();
 const port = Number(process.env.API_PORT ?? 4000);
@@ -87,52 +88,20 @@ app.get('/api/health', async (_req, res) => {
 app.use('/api/auth', authLimiter, authRoutes);
 
 /* ── Module routes (authentication is enforced inside each router) ── */
-app.use('/api/departments', departmentRoutes);
-app.use('/api/students',    studentRoutes);
-app.use('/api/faculty',     facultyRoutes);
-app.use('/api/subjects',    subjectRoutes);
-app.use('/api/classrooms',  classroomRoutes);
-app.use('/api/timetable',   timetableRoutes);
-app.use('/api/exams',       examRoutes);
-app.use('/api/attendance',  attendanceRoutes);
-app.use('/api/marks',       marksRoutes);
-app.use('/api/audit',       auditRoutes);
-app.use('/api/documents',   documentRoutes);
-
-/* ── Legacy JSON-blob state API (protected) ─────────────────────── */
-// Kept for frontend transition. Requires auth.
-// PATCH and POST /reset require SUPER_ADMIN.
-
-app.get('/api/state', authenticateUser, async (_req, res, next) => {
-  try {
-    res.json(await getState());
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.patch('/api/state', authenticateUser, async (req, res, next) => {
-  try {
-    if (!req.body || Array.isArray(req.body) || typeof req.body !== 'object') {
-      return res.status(400).json({ error: 'Request body must be a JSON object.' });
-    }
-    res.json(await patchState(req.body));
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Reset is SUPER_ADMIN only and blocked in production
-app.post('/api/reset', authenticateUser, requireRole('SUPER_ADMIN'), async (_req, res, next) => {
-  if (IS_PROD) {
-    return res.status(403).json({ error: 'Reset is disabled in production.' });
-  }
-  try {
-    res.json(await resetState());
-  } catch (error) {
-    next(error);
-  }
-});
+app.use('/api/institutions', institutionRoutes);
+app.use('/api/academic',     academicRoutes);
+app.use('/api/departments',  departmentRoutes);
+app.use('/api/students',     studentRoutes);
+app.use('/api/faculty',      facultyRoutes);
+app.use('/api/subjects',     subjectRoutes);
+app.use('/api/classrooms',   classroomRoutes);
+app.use('/api/timetable',    timetableRoutes);
+app.use('/api/exams',        examRoutes);
+app.use('/api/attendance',   attendanceRoutes);
+app.use('/api/marks',        marksRoutes);
+app.use('/api/audit',        auditRoutes);
+app.use('/api/documents',    documentRoutes);
+app.use('/api/verify',       documentRoutes);
 
 /* ── Centralised error handler ──────────────────────────────────── */
 app.use((error, _req, res, _next) => {
@@ -157,7 +126,7 @@ app.use((error, _req, res, _next) => {
 runMigrations(pool)
   .then(initDatabase)
   .then(() => {
-    app.listen(port, () => {
+    app.listen(port, '0.0.0.0', () => {
       console.log(`CampusFlow API v2.0 running on http://localhost:${port}`);
       console.log(`  Auth:    POST /api/auth/login`);
       console.log(`  Verify:  GET  /api/verify/document/:id`);

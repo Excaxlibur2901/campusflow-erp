@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: campusflow_erp
       POSTGRES_USER: campusflow
-      POSTGRES_PASSWORD: campusflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-campusflow_dev_secret_change_me}
     ports:
       - "5432:5432"
     volumes:
@@ -23,8 +23,8 @@ services:
       - "3000:80"
     environment:
       API_PORT: "4000"
-      CLIENT_ORIGIN: "*"
-      DATABASE_URL: postgres://campusflow:campusflow@postgres:5432/campusflow_erp
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000}
+      DATABASE_URL: postgres://campusflow:${POSTGRES_PASSWORD:-campusflow_dev_secret_change_me}@postgres:5432/campusflow_erp
     depends_on:
       postgres:
         condition: service_healthy

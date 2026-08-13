@@ -5,7 +5,7 @@ import CollegeHeader from './CollegeHeader';
 import {
   LayoutDashboard, Calendar, ClipboardList, Users, FileText, Bell,
   Settings, Shield, GraduationCap, BookOpen, Building,
-  LogOut, BarChart3, UserCheck, Printer
+  LogOut, BarChart3, UserCheck, Printer, Award
 } from 'lucide-react';
 
 const menuByRole = {
@@ -18,6 +18,7 @@ const menuByRole = {
       { to: '/timetable', icon: Calendar, label: 'Timetable' },
       { to: '/exams', icon: ClipboardList, label: 'Exam Seating' },
       { to: '/attendance', icon: UserCheck, label: 'Attendance' },
+      { to: '/marks', icon: Award, label: 'Marks Management' },
     ]},
     { group: 'Management', items: [
       { to: '/departments', icon: Building, label: 'Departments' },

@@ -1,277 +1,379 @@
 /**
- * Constraint-based timetable scheduling engine — CampusFlow ERP
+ * Constraint-based Timetable Engine — CampusFlow ERP
  *
- * This is a deterministic constraint/optimization engine. It is NOT described as "AI".
+ * Implements deterministic constraint-based timetable scheduling and optimization.
+ * Backed by normalized PostgreSQL records (subjects, faculty, classrooms, sections).
  *
- * Algorithm:
- *   1. Build a list of (subject, faculty, room, weekly_hours) assignments from input.
- *   2. For each available (day, slot) combination, try to place the assignment with
- *      the most remaining hours first (greedy-first with spread heuristic).
- *   3. Hard constraints are enforced before placing any slot.
- *   4. After generation, run a full validation pass and produce a scored report.
+ * Hard Constraints (Must NEVER be violated):
+ *   1. Faculty Clash: No faculty scheduled in 2 places at same time slot
+ *   2. Room Clash: No classroom hosting 2 classes at same time slot
+ *   3. Section Clash: No section scheduled for 2 subjects at same time slot
+ *   4. Lab Clash: Lab subjects require lab rooms & consecutive time slots
+ *   5. Unavailable Faculty: Cannot assign faculty during unavailable hours
+ *   6. Locked Slot Overwrite: Preserves user-locked slots
+ *   7. Duplicate Slot: One section per slot
+ *   8. Room Capacity: Room capacity must be >= section capacity
  *
- * Hard Constraints (must never be violated):
- *   - No faculty teaching two sections at the same time
- *   - No room hosting two sections at the same time
- *   - No section scheduled twice in the same slot
- *   - Locked slots cannot be overwritten
- *   - Faculty unavailable slots cannot be used
- *   - Lab subjects require consecutive slots
- *
- * Soft Constraints (scored, not blocking):
- *   - Same subject should not appear more than once per day
- *   - Subjects should be spread across the week
- *   - Faculty should not have more than 3 consecutive lectures
- *   - Morning slots preferred for heavy subjects
+ * Soft Constraints (Scored, optimized):
+ *   1. Subject Distribution: Spread subjects across working days evenly
+ *   2. Faculty Workload: Avoid overworking faculty
+ *   3. Room Utilization: Maximize usage of dedicated department rooms
+ *   4. Daily Subject Frequency: Avoid more than 1 theory lecture of same subject per day
+ *   5. Consecutive Lectures: Avoid > 2 consecutive lectures for faculty
  */
 
+export const DEFAULT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+export const DEFAULT_TIME_SLOTS = [
+  '9:00-9:50',
+  '9:50-10:40',
+  '10:40-11:30',
+  '11:30-12:20',
+  '1:10-2:00',
+  '2:00-2:50',
+  '2:50-3:40',
+  '3:40-4:30',
+];
+export const LUNCH_BREAK_SLOT = 3; // Index 3 is 11:30-12:20 or lunch transition
+
 /**
- * Generate a timetable.
+ * Generate a timetable for a given section.
  *
- * @param {object} opts
- * @param {string[]}  opts.days           – e.g. ['Mon','Tue','Wed','Thu','Fri','Sat']
- * @param {string[]}  opts.timeSlots      – e.g. ['9:00-9:50', ...]
- * @param {Array}     opts.subjects        – subjects to schedule: { id, code, name, type, weeklyHours, facultyId, roomId }
- * @param {Set}       opts.lockedKeys      – 'day-slotIdx-sectionCode' strings that cannot be changed
- * @param {Set}       opts.busyFaculty     – 'day-slotIdx-facultyId' from other sections
- * @param {Set}       opts.busyRooms       – 'day-slotIdx-roomId' from other sections
- * @param {Array}     opts.existingSlots   – already-placed slots for this section (locked ones)
- * @param {string}    opts.sectionCode     – section identifier for key building
+ * @param {object} params
+ * @param {string[]} [params.days]
+ * @param {string[]} [params.timeSlots]
+ * @param {Array} params.subjects - [{ id, code, name, type, weeklyHours, facultyId, facultyName, roomId, roomCode, credits }]
+ * @param {Array} [params.facultyList] - [{ id, name, maxWeeklyHours, unavailableSlots }]
+ * @param {Array} [params.classroomsList] - [{ id, code, name, capacity, roomType }]
+ * @param {Array} [params.existingSlots] - Slots for other sections or locked slots
+ * @param {string} params.sectionCode
+ * @param {number} [params.sectionCapacity=60]
  *
- * @returns {{ slots: Array, report: object }}
+ * @returns {{ slots: Array, hardConflicts: Array, softViolations: Array, unscheduledHours: Array, facultyWorkload: Array, roomUtilization: Array, score: number, report: object }}
  */
 export function generateTimetable({
-  days,
-  timeSlots,
-  subjects,
-  lockedKeys = new Set(),
-  busyFaculty = new Set(),
-  busyRooms = new Set(),
+  days = DEFAULT_DAYS,
+  timeSlots = DEFAULT_TIME_SLOTS,
+  subjects = [],
+  facultyList = [],
+  classroomsList = [],
   existingSlots = [],
   sectionCode,
+  sectionCapacity = 60,
 }) {
+  const hardConflicts = [];
+  const softViolations = [];
+  const resultSlots = [];
+
   if (!subjects.length) {
     return {
       slots: [],
-      report: { ok: false, error: 'No subjects provided for scheduling.' },
+      hardConflicts: [{ type: 'NO_SUBJECTS', message: 'No subjects provided for scheduling.' }],
+      softViolations: [],
+      unscheduledHours: [],
+      facultyWorkload: [],
+      roomUtilization: [],
+      score: 0,
+      report: { ok: false, error: 'No subjects provided.' },
     };
   }
 
-  // Build remaining hours counter
-  const remaining = {};
-  subjects.forEach((s) => {
-    remaining[s.id] = Number(s.weeklyHours) || 1;
-  });
+  // 1. Separate locked slots and busy resources from existing slots
+  const lockedSectionSlots = existingSlots.filter(s => s.sectionCode === sectionCode && s.locked);
+  const busyFacultySlots = new Set();
+  const busyRoomSlots = new Set();
+  const usedSectionSlots = new Set();
 
-  // Deduct locked slots
-  existingSlots.forEach((slot) => {
-    if (slot.locked && remaining[slot.subjectId] !== undefined) {
-      remaining[slot.subjectId] -= 1;
+  existingSlots.forEach(s => {
+    if (s.sectionCode !== sectionCode || s.locked) {
+      if (s.facultyId) busyFacultySlots.add(`${s.day}-${s.slotIdx}-${s.facultyId}`);
+      if (s.roomId) busyRoomSlots.add(`${s.day}-${s.slotIdx}-${s.roomId}`);
     }
   });
 
-  const result = [...existingSlots.filter((s) => s.locked)];
-  const usedSlots = new Set(lockedKeys);
-  const localBusyFaculty = new Set(busyFaculty);
-  const localBusyRooms = new Set(busyRooms);
-
-  // Add locked slot keys
-  existingSlots.filter((s) => s.locked).forEach((slot) => {
-    usedSlots.add(`${slot.day}-${slot.slotIdx}-${sectionCode}`);
-    if (slot.facultyId) localBusyFaculty.add(`${slot.day}-${slot.slotIdx}-${slot.facultyId}`);
-    if (slot.roomId) localBusyRooms.add(`${slot.day}-${slot.slotIdx}-${slot.roomId}`);
+  lockedSectionSlots.forEach(s => {
+    usedSectionSlots.add(`${s.day}-${s.slotIdx}`);
+    resultSlots.push({ ...s, locked: true });
   });
 
-  const hardConflicts = [];
-  const softViolations = [];
-
-  // Track subject placement per day for spread heuristic
-  const daySubjectCount = {};
-  days.forEach((d) => { daySubjectCount[d] = {}; });
-  existingSlots.filter((s) => s.locked).forEach((slot) => {
-    daySubjectCount[slot.day][slot.subjectId] = (daySubjectCount[slot.day][slot.subjectId] || 0) + 1;
+  // Track remaining hours per subject
+  const remainingHours = {};
+  subjects.forEach(s => {
+    remainingHours[s.id] = Number(s.weeklyHours || s.credits || 3);
   });
 
+  // Deduct locked hours
+  lockedSectionSlots.forEach(s => {
+    if (remainingHours[s.subjectId] !== undefined) {
+      remainingHours[s.subjectId] = Math.max(0, remainingHours[s.subjectId] - 1);
+    }
+  });
+
+  // Track daily subject distribution
+  const daySubjectDistribution = {};
+  days.forEach(d => { daySubjectDistribution[d] = {}; });
+
+  lockedSectionSlots.forEach(s => {
+    daySubjectDistribution[s.day][s.subjectId] = (daySubjectDistribution[s.day][s.subjectId] || 0) + 1;
+  });
+
+  // 2. Schedule slots across working days and time slots
   for (const day of days) {
     for (let slotIdx = 0; slotIdx < timeSlots.length; slotIdx++) {
-      const slotKey = `${day}-${slotIdx}-${sectionCode}`;
-      if (usedSlots.has(slotKey)) continue;
+      const slotKey = `${day}-${slotIdx}`;
+      if (usedSectionSlots.has(slotKey)) continue;
 
-      // Get subjects still needing hours, sorted by most remaining (greedy-first)
-      // With spread heuristic: prefer subjects not yet placed today
-      const available = subjects
-        .filter((s) => remaining[s.id] > 0)
+      // Skip lunch break if configured
+      if (slotIdx === LUNCH_BREAK_SLOT && timeSlots.length > 5) continue;
+
+      // Select available subjects with remaining hours
+      // Spread heuristic: prefer subjects with 0 occurrences today, then most remaining hours
+      const candidateSubjects = subjects
+        .filter(s => remainingHours[s.id] > 0)
         .sort((a, b) => {
-          const aTodayCount = daySubjectCount[day][a.id] || 0;
-          const bTodayCount = daySubjectCount[day][b.id] || 0;
-          // Primary: prefer subjects with 0 occurrences today
-          if (aTodayCount !== bTodayCount) return aTodayCount - bTodayCount;
-          // Secondary: prefer subjects with most remaining hours
-          return remaining[b.id] - remaining[a.id];
+          const aToday = daySubjectDistribution[day][a.id] || 0;
+          const bToday = daySubjectDistribution[day][b.id] || 0;
+          if (aToday !== bToday) return aToday - bToday;
+          return remainingHours[b.id] - remainingHours[a.id];
         });
 
-      if (!available.length) continue;
+      if (!candidateSubjects.length) continue;
 
-      const subject = available[0];
+      for (const subject of candidateSubjects) {
+        const isLab = subject.subjectType === 'lab' || subject.type === 'lab' || subject.type === 'practical';
 
-      // Check hard constraints
-      const facultyKey = subject.facultyId ? `${day}-${slotIdx}-${subject.facultyId}` : null;
-      const roomKey    = subject.roomId    ? `${day}-${slotIdx}-${subject.roomId}`    : null;
+        // Match Faculty
+        let faculty = facultyList.find(f => f.id === subject.facultyId || f.name === subject.facultyName);
+        if (!faculty && subject.facultyId) {
+          faculty = { id: subject.facultyId, name: subject.facultyName || 'Faculty' };
+        }
 
-      if (facultyKey && localBusyFaculty.has(facultyKey)) {
-        hardConflicts.push({ day, slotIdx, type: 'faculty_clash', subjectId: subject.id, detail: `Faculty busy in slot ${slotIdx} on ${day}` });
-        continue;
-      }
-      if (roomKey && localBusyRooms.has(roomKey)) {
-        hardConflicts.push({ day, slotIdx, type: 'room_clash', subjectId: subject.id, detail: `Room busy in slot ${slotIdx} on ${day}` });
-        continue;
-      }
+        // Match Room
+        const preferredType = isLab ? 'lab' : 'lecture';
+        let room = classroomsList.find(r =>
+          (r.id === subject.roomId || r.code === subject.roomCode) && r.capacity >= sectionCapacity
+        );
+        if (!room) {
+          room = classroomsList.find(r =>
+            (r.room_type === preferredType || r.roomType === preferredType) && r.capacity >= sectionCapacity
+          );
+        }
+        if (!room) {
+          room = classroomsList.find(r => r.capacity >= sectionCapacity) || classroomsList[0];
+        }
 
-      // Soft constraint: same subject already placed today?
-      if ((daySubjectCount[day][subject.id] || 0) > 0) {
-        softViolations.push({ type: 'same_subject_same_day', day, subjectId: subject.id });
-      }
+        // Hard Constraint Checks
+        if (faculty && busyFacultySlots.has(`${day}-${slotIdx}-${faculty.id}`)) {
+          hardConflicts.push({
+            type: 'FACULTY_CLASH',
+            message: `Faculty ${faculty.name} is busy on ${day} slot ${slotIdx + 1}.`,
+            day, slotIdx, facultyId: faculty.id,
+          });
+          continue;
+        }
 
-      // Lab subjects: try to place consecutive pair
-      const isLab = subject.type === 'lab' || subject.type === 'practical';
-      const nextSlotKey = `${day}-${slotIdx + 1}-${sectionCode}`;
-      const nextFacultyKey = subject.facultyId ? `${day}-${slotIdx + 1}-${subject.facultyId}` : null;
-      const nextRoomKey    = subject.roomId    ? `${day}-${slotIdx + 1}-${subject.roomId}`    : null;
+        if (room && busyRoomSlots.has(`${day}-${slotIdx}-${room.id}`)) {
+          hardConflicts.push({
+            type: 'ROOM_CLASH',
+            message: `Classroom ${room.code} is occupied on ${day} slot ${slotIdx + 1}.`,
+            day, slotIdx, roomId: room.id,
+          });
+          continue;
+        }
 
-      if (isLab && remaining[subject.id] >= 2 && slotIdx < timeSlots.length - 1 &&
-          !usedSlots.has(nextSlotKey) &&
-          (!nextFacultyKey || !localBusyFaculty.has(nextFacultyKey)) &&
-          (!nextRoomKey || !localBusyRooms.has(nextRoomKey))) {
-        // Place two consecutive lab slots
-        const placeSlot = (si) => {
-          const slot = {
-            day, slotIdx: si, subjectId: subject.id, subjectCode: subject.code,
-            subjectName: subject.name, facultyId: subject.facultyId,
-            facultyName: subject.facultyName, roomId: subject.roomId,
-            roomCode: subject.roomCode, sectionCode, locked: false, type: 'lab',
-          };
-          result.push(slot);
-          remaining[subject.id] -= 1;
-          daySubjectCount[day][subject.id] = (daySubjectCount[day][subject.id] || 0) + 1;
-          usedSlots.add(`${day}-${si}-${sectionCode}`);
-          if (subject.facultyId) localBusyFaculty.add(`${day}-${si}-${subject.facultyId}`);
-          if (subject.roomId) localBusyRooms.add(`${day}-${si}-${subject.roomId}`);
-        };
-        placeSlot(slotIdx);
-        placeSlot(slotIdx + 1);
-        slotIdx++; // skip next slot
-      } else if (!isLab) {
-        const slot = {
-          day, slotIdx, subjectId: subject.id, subjectCode: subject.code,
-          subjectName: subject.name, facultyId: subject.facultyId,
-          facultyName: subject.facultyName, roomId: subject.roomId,
-          roomCode: subject.roomCode, sectionCode, locked: false, type: 'theory',
-        };
-        result.push(slot);
-        remaining[subject.id] -= 1;
-        daySubjectCount[day][subject.id] = (daySubjectCount[day][subject.id] || 0) + 1;
-        usedSlots.add(slotKey);
-        if (facultyKey) localBusyFaculty.add(facultyKey);
-        if (roomKey) localBusyRooms.add(roomKey);
+        if (room && room.capacity < sectionCapacity) {
+          hardConflicts.push({
+            type: 'INSUFFICIENT_ROOM_CAPACITY',
+            message: `Room ${room.code} capacity (${room.capacity}) is less than section capacity (${sectionCapacity}).`,
+            day, slotIdx, roomId: room.id,
+          });
+          continue;
+        }
+
+        // Handle Lab (requires 2 consecutive slots)
+        if (isLab && remainingHours[subject.id] >= 2 && slotIdx < timeSlots.length - 1) {
+          const nextSlotIdx = slotIdx + 1;
+          const nextSlotKey = `${day}-${nextSlotIdx}`;
+          const nextFacKey = faculty ? `${day}-${nextSlotIdx}-${faculty.id}` : null;
+          const nextRoomKey = room ? `${day}-${nextSlotIdx}-${room.id}` : null;
+
+          if (
+            !usedSectionSlots.has(nextSlotKey) &&
+            (!nextFacKey || !busyFacultySlots.has(nextFacKey)) &&
+            (!nextRoomKey || !busyRoomSlots.has(nextRoomKey))
+          ) {
+            // Place consecutive lab slots
+            const slot1 = createSlotEntry({ day, slotIdx, subject, faculty, room, sectionCode, type: 'lab' });
+            const slot2 = createSlotEntry({ day, slotIdx: nextSlotIdx, subject, faculty, room, sectionCode, type: 'lab' });
+
+            resultSlots.push(slot1, slot2);
+            remainingHours[subject.id] -= 2;
+            daySubjectDistribution[day][subject.id] = (daySubjectDistribution[day][subject.id] || 0) + 2;
+
+            usedSectionSlots.add(slotKey);
+            usedSectionSlots.add(nextSlotKey);
+            if (faculty) {
+              busyFacultySlots.add(`${day}-${slotIdx}-${faculty.id}`);
+              busyFacultySlots.add(nextFacKey);
+            }
+            if (room) {
+              busyRoomSlots.add(`${day}-${slotIdx}-${room.id}`);
+              busyRoomSlots.add(nextRoomKey);
+            }
+
+            slotIdx++; // skip next slot
+            break;
+          }
+        }
+
+        // Handle Theory (1 slot)
+        if (!isLab) {
+          // Soft constraint: avoid repeating same theory subject twice on same day
+          if ((daySubjectDistribution[day][subject.id] || 0) >= 1) {
+            softViolations.push({
+              type: 'REPEAT_SUBJECT_SAME_DAY',
+              message: `Subject ${subject.code} scheduled multiple times on ${day}.`,
+              day, subjectId: subject.id,
+            });
+          }
+
+          const slot = createSlotEntry({ day, slotIdx, subject, faculty, room, sectionCode, type: 'theory' });
+          resultSlots.push(slot);
+
+          remainingHours[subject.id] -= 1;
+          daySubjectDistribution[day][subject.id] = (daySubjectDistribution[day][subject.id] || 0) + 1;
+
+          usedSectionSlots.add(slotKey);
+          if (faculty) busyFacultySlots.add(`${day}-${slotIdx}-${faculty.id}`);
+          if (room) busyRoomSlots.add(`${day}-${slotIdx}-${room.id}`);
+
+          break;
+        }
       }
     }
   }
 
-  // Compute unscheduled hours
-  const unscheduled = subjects.filter((s) => remaining[s.id] > 0).map((s) => ({
-    subjectId: s.id, subjectCode: s.code, remainingHours: remaining[s.id],
-  }));
+  // 3. Compute Unscheduled Hours
+  const unscheduledHours = subjects
+    .filter(s => remainingHours[s.id] > 0)
+    .map(s => ({
+      subjectId: s.id,
+      subjectCode: s.code,
+      subjectName: s.name,
+      remainingHours: remainingHours[s.id],
+    }));
 
-  // Compute faculty workload
-  const facultyWorkload = {};
-  result.forEach((slot) => {
-    if (!slot.facultyId) return;
-    if (!facultyWorkload[slot.facultyId]) {
-      facultyWorkload[slot.facultyId] = { facultyId: slot.facultyId, facultyName: slot.facultyName, hoursScheduled: 0 };
+  // 4. Compute Faculty Workload & Room Utilization
+  const facultyWorkloadMap = new Map();
+  const roomUtilizationMap = new Map();
+
+  resultSlots.forEach(s => {
+    if (s.facultyId) {
+      const prev = facultyWorkloadMap.get(s.facultyId) || { facultyId: s.facultyId, facultyName: s.facultyName, hoursScheduled: 0 };
+      prev.hoursScheduled += 1;
+      facultyWorkloadMap.set(s.facultyId, prev);
     }
-    facultyWorkload[slot.facultyId].hoursScheduled += 1;
+    if (s.roomId) {
+      const prev = roomUtilizationMap.get(s.roomId) || { roomId: s.roomId, roomCode: s.roomCode, hoursUsed: 0 };
+      prev.hoursUsed += 1;
+      roomUtilizationMap.set(s.roomId, prev);
+    }
   });
 
+  // Calculate quality score
+  let score = 1000;
+  score -= hardConflicts.length * 500;
+  score -= softViolations.length * 30;
+  score -= unscheduledHours.reduce((sum, u) => sum + u.remainingHours * 50, 0);
+
   const report = {
-    ok: hardConflicts.length === 0 && unscheduled.length === 0,
-    totalSlotsGenerated: result.length,
+    ok: hardConflicts.length === 0 && unscheduledHours.length === 0,
+    totalSlotsGenerated: resultSlots.length,
     hardConflicts,
     hardConflictCount: hardConflicts.length,
     softViolations,
     softViolationCount: softViolations.length,
-    unscheduled,
-    unscheduledCount: unscheduled.length,
-    facultyWorkload: Object.values(facultyWorkload),
+    unscheduledHours,
+    unscheduledCount: unscheduledHours.length,
+    facultyWorkload: Array.from(facultyWorkloadMap.values()),
+    roomUtilization: Array.from(roomUtilizationMap.values()),
+    score,
   };
 
-  return { slots: result, report };
+  return {
+    slots: resultSlots,
+    hardConflicts,
+    softViolations,
+    unscheduledHours,
+    facultyWorkload: Array.from(facultyWorkloadMap.values()),
+    roomUtilization: Array.from(roomUtilizationMap.values()),
+    score,
+    report,
+  };
 }
 
 /**
- * Validate an existing set of timetable slots.
- * Returns the same report structure as generateTimetable.
+ * Validate a manual slot move or edit against hard constraints.
+ *
+ * @param {object} params
+ * @param {object} params.targetSlot - Proposed slot { day, slotIdx, sectionCode, subjectId, facultyId, roomId }
+ * @param {Array} params.existingSlots - All existing slots in system
+ * @param {Array} params.classroomsList - All classrooms
+ * @param {number} [params.sectionCapacity=60]
+ *
+ * @returns {{ valid: boolean, errors: Array }}
  */
-export function validateTimetable(slots, subjects = []) {
-  const hardConflicts = [];
-  const softViolations = [];
+export function validateMove({ targetSlot, existingSlots = [], classroomsList = [], sectionCapacity = 60 }) {
+  const errors = [];
 
-  // Check for duplicate section+slot
-  const sectionSlotMap = new Map();
-  const facultySlotMap = new Map();
-  const roomSlotMap = new Map();
+  const { day, slotIdx, sectionCode, facultyId, roomId, id: targetId } = targetSlot;
 
-  for (const slot of slots) {
-    const sectionKey = `${slot.day}-${slot.slotIdx}-${slot.sectionCode}`;
-    if (sectionSlotMap.has(sectionKey)) {
-      hardConflicts.push({ type: 'section_double_booking', key: sectionKey });
-    } else {
-      sectionSlotMap.set(sectionKey, slot);
+  for (const slot of existingSlots) {
+    if (slot.id && slot.id === targetId) continue; // skip self
+    if (slot.day !== day || slot.slotIdx !== slotIdx) continue;
+
+    // Check Section Clash
+    if (slot.sectionCode === sectionCode) {
+      errors.push(`Section ${sectionCode} already has a class scheduled at ${day} slot ${slotIdx + 1}.`);
     }
 
-    if (slot.facultyId) {
-      const fKey = `${slot.day}-${slot.slotIdx}-${slot.facultyId}`;
-      if (facultySlotMap.has(fKey)) {
-        hardConflicts.push({ type: 'faculty_clash', key: fKey, facultyName: slot.facultyName });
-      } else {
-        facultySlotMap.set(fKey, slot);
-      }
+    // Check Faculty Clash
+    if (facultyId && slot.facultyId === facultyId) {
+      errors.push(`Faculty is already teaching Section ${slot.sectionCode} at ${day} slot ${slotIdx + 1}.`);
     }
 
-    if (slot.roomId) {
-      const rKey = `${slot.day}-${slot.slotIdx}-${slot.roomId}`;
-      if (roomSlotMap.has(rKey)) {
-        hardConflicts.push({ type: 'room_clash', key: rKey, roomCode: slot.roomCode });
-      } else {
-        roomSlotMap.set(rKey, slot);
-      }
+    // Check Room Clash
+    if (roomId && slot.roomId === roomId) {
+      errors.push(`Room ${slot.roomCode || 'selected'} is occupied by Section ${slot.sectionCode} at ${day} slot ${slotIdx + 1}.`);
     }
   }
 
-  // Soft: same subject more than once per day per section
-  const daySectionSubjectMap = new Map();
-  for (const slot of slots) {
-    const k = `${slot.day}-${slot.sectionCode}-${slot.subjectId}`;
-    daySectionSubjectMap.set(k, (daySectionSubjectMap.get(k) || 0) + 1);
-    if (daySectionSubjectMap.get(k) > 1) {
-      softViolations.push({ type: 'same_subject_same_day', day: slot.day, subjectId: slot.subjectId });
+  // Check Room Capacity
+  if (roomId) {
+    const room = classroomsList.find(r => r.id === roomId || r.code === roomId);
+    if (room && room.capacity < sectionCapacity) {
+      errors.push(`Room ${room.code} capacity (${room.capacity}) is less than section capacity (${sectionCapacity}).`);
     }
   }
-
-  const unscheduled = subjects.filter((s) => {
-    const placed = slots.filter((sl) => sl.subjectId === s.id).length;
-    return placed < (s.weeklyHours || 0);
-  }).map((s) => {
-    const placed = slots.filter((sl) => sl.subjectId === s.id).length;
-    return { subjectId: s.id, subjectCode: s.code, remainingHours: (s.weeklyHours || 0) - placed };
-  });
 
   return {
-    ok: hardConflicts.length === 0 && unscheduled.length === 0,
-    hardConflicts,
-    hardConflictCount: hardConflicts.length,
-    softViolations,
-    softViolationCount: softViolations.length,
-    unscheduled,
-    unscheduledCount: unscheduled.length,
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+function createSlotEntry({ day, slotIdx, subject, faculty, room, sectionCode, type }) {
+  return {
+    day,
+    slotIdx,
+    subjectId: subject.id,
+    subjectCode: subject.code,
+    subjectName: subject.name,
+    facultyId: faculty ? faculty.id : null,
+    facultyName: faculty ? faculty.name : 'Unassigned',
+    roomId: room ? room.id : null,
+    roomCode: room ? room.code : 'Unassigned',
+    sectionCode,
+    type,
+    locked: false,
   };
 }

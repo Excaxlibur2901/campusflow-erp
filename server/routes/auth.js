@@ -49,6 +49,19 @@ function signRefresh(userId) {
   return { token, hash };
 }
 
+/* ── GET /api/auth/setup-status ──────────────────────────────────── */
+router.get('/setup-status', async (req, res, next) => {
+  try {
+    const existing = await pool.query(
+      `SELECT 1 FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE r.code = 'SUPER_ADMIN' LIMIT 1`,
+    );
+    return res.json({ setupDone: existing.rowCount > 0 });
+  } catch (err) { next(err); }
+});
+
 /* ─────────────────────────────────────────────────────────────────
    POST /api/auth/setup
    First-run only. Creates institution + SUPER_ADMIN account.
@@ -112,14 +125,43 @@ router.post('/setup', async (req, res, next) => {
         [userId],
       );
 
-      // Mark setup as done in app_state
-      await client.query(
-        `UPDATE app_state SET data = data || '{"setupDone": true}'::jsonb WHERE id = 'main'`,
-      );
-
       await client.query('COMMIT');
 
-      return res.status(201).json({ ok: true, message: 'Setup complete. You can now log in.' });
+      // Issue access token and set refresh cookie for immediate login
+      const roles = ['SUPER_ADMIN'];
+      const accessToken = signAccess(userId, roles);
+      const { token: refreshToken, hash: refreshHash } = signRefresh(userId);
+      const rawIp = req.ip || req.socket?.remoteAddress || null;
+      const cleanIp = (typeof rawIp === 'string' && rawIp.replace(/^::ffff:/, '').trim()) || null;
+      const validIp = (cleanIp === '::1' || /^[0-9.:a-fA-F]+$/.test(cleanIp)) ? cleanIp : null;
+      const ua = req.headers['user-agent'] ?? null;
+
+      try {
+        await pool.query(
+          `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+           VALUES ($1, $2, $3, $4::inet, $5)`,
+          [userId, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
+        );
+      } catch (sessErr) {
+        console.warn('[auth] user_session setup insert warning:', sessErr.message);
+      }
+
+      await auditLog({ userId, action: 'CREATE', module: 'Auth', entity: adminEmail.trim().toLowerCase(), ip: validIp, ua });
+
+      res.cookie(COOKIE_NAME, refreshToken, REFRESH_COOKIE_OPTIONS);
+
+      return res.status(201).json({
+        ok: true,
+        accessToken,
+        expiresIn: ACCESS_TTL_S,
+        user: {
+          id: userId,
+          email: adminEmail.trim().toLowerCase(),
+          fullName: adminName.trim(),
+          initials,
+          roles,
+        },
+      });
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -417,7 +459,6 @@ router.post('/register', async (req, res, next) => {
       fullName,
       email,
       password,
-      role = 'STUDENT',
       department = 'CSE',
       institutionId,
       institutionName,
@@ -472,20 +513,9 @@ router.post('/register', async (req, res, next) => {
       );
       const userId = userResult.rows[0].id;
 
-      // Assign role
-      const roleCode = (accountType === 'institution' ? 'SUPER_ADMIN' : (role || 'STUDENT'))
-        .toUpperCase()
-        .replace(/\s+/g, '_');
-
-      const validRoleCodeMap = {
-        'STUDENT': 'STUDENT',
-        'FACULTY': 'FACULTY',
-        'HOD': 'HOD',
-        'EXAM_CELL': 'EXAM_CELL',
-        'PRINCIPAL': 'PRINCIPAL',
-        'SUPER_ADMIN': 'SUPER_ADMIN',
-      };
-      const finalRoleCode = validRoleCodeMap[roleCode] || 'STUDENT';
+      // Security rule: Public user registration creates STUDENT accounts ONLY.
+      // Staff/Admin accounts (SUPER_ADMIN, PRINCIPAL, HOD, EXAM_CELL, FACULTY) must be created by an authorized admin.
+      const finalRoleCode = accountType === 'institution' ? 'SUPER_ADMIN' : 'STUDENT';
 
       // Ensure role exists in roles table
       await client.query(
@@ -508,12 +538,6 @@ router.post('/register', async (req, res, next) => {
         `INSERT INTO user_roles (user_id, role_id, department_id)
          SELECT $1, id, $3 FROM roles WHERE code = $2`,
         [userId, finalRoleCode, deptId],
-      );
-
-      await client.query(
-        `INSERT INTO app_state (id, data)
-         VALUES ('main', '{"setupDone": true}'::jsonb)
-         ON CONFLICT (id) DO UPDATE SET data = app_state.data || '{"setupDone": true}'::jsonb`,
       );
 
       await client.query('COMMIT');

@@ -4,43 +4,33 @@ import CollegeHeader from '../components/CollegeHeader';
 import { Save, Upload, Database, AlertTriangle, Image } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { settings, setSettings, showToast, addAudit, resetAll,
-    departments, facultyList, subjectsList, classroomsList, studentsList, examsList } = useData();
+  const { settings, setSettings, showToast } = useData();
   const [activeTab, setActiveTab] = useState('institution');
   const [form, setForm] = useState({ ...settings });
   const [backups, setBackups] = useState([]);
-  const [confirmReset, setConfirmReset] = useState(false);
   const logoInputRef = useRef(null);
 
   const handleSave = () => {
     setSettings(form);
     showToast('Settings saved successfully!');
-    addAudit('admin@campus.edu', 'UPDATE', 'Settings', activeTab);
   };
 
   const handleBackup = () => {
     const backupData = {
       exportedAt: new Date().toISOString(),
-      version: '1.0',
+      version: '2.0',
       settings,
-      departments,
-      faculty: facultyList,
-      subjects: subjectsList,
-      classrooms: classroomsList,
-      students: studentsList,
-      exams: examsList,
     };
     const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `campusflow_backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `campusflow_settings_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    const name = `backup_${new Date().toISOString().split('T')[0]}.json`;
+    const name = `settings_${new Date().toISOString().split('T')[0]}.json`;
     setBackups(prev => [{ name, size: `${(JSON.stringify(backupData).length / 1024).toFixed(1)} KB`, date: new Date().toLocaleDateString(), status: 'Completed' }, ...prev]);
-    showToast('Backup downloaded successfully!');
-    addAudit(settings.email || 'admin', 'BACKUP', 'System', name);
+    showToast('Settings backup downloaded successfully!');
   };
 
   const handleLogoUpload = (e) => {
@@ -186,17 +176,9 @@ export default function SettingsPage() {
         </div>
       )}
       {activeTab==='danger'&&(
-        <div className="card" style={{borderLeft:'4px solid var(--error)'}}>
-          <h3 style={{marginBottom:8,fontWeight:700,color:'var(--error)'}}><AlertTriangle size={20} style={{verticalAlign:'middle',marginRight:8}}/>Danger Zone</h3>
-          <p style={{color:'var(--text-muted)',marginBottom:20}}>These actions are destructive and cannot be undone.</p>
-          <div className="card" style={{background:'rgba(220,38,38,0.04)',border:'1px solid rgba(220,38,38,0.15)',padding:20}}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div><strong>Reset All Data</strong><p style={{fontSize:13,color:'var(--text-muted)',marginTop:4}}>Erases all institution data, departments, faculty, students, and returns to setup wizard.</p></div>
-              {!confirmReset?(<button className="btn btn-error" onClick={()=>setConfirmReset(true)}>Reset Everything</button>):(
-                <div style={{display:'flex',gap:8}}><button className="btn btn-outline" onClick={()=>setConfirmReset(false)}>Cancel</button><button className="btn btn-error" onClick={resetAll}>Yes, Delete All Data</button></div>
-              )}
-            </div>
-          </div>
+        <div className="card" style={{borderLeft:'4px solid var(--warning)'}}>
+          <h3 style={{marginBottom:8,fontWeight:700,color:'var(--warning)'}}><AlertTriangle size={20} style={{verticalAlign:'middle',marginRight:8}}/>Database Security & Data Integrity</h3>
+          <p style={{color:'var(--text-muted)',marginBottom:12}}>CampusFlow ERP business data is normalized and securely managed in PostgreSQL tables. Direct client-side database resets are disabled to ensure audit compliance and prevent data loss.</p>
         </div>
       )}
     </div>
