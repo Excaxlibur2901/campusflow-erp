@@ -3,12 +3,12 @@ import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import {
   Users, GraduationCap, BookOpen, Building, Calendar, ClipboardList,
-  UserCheck, Clock, TrendingUp, TrendingDown,
+  UserCheck, TrendingUp, TrendingDown,
   FileText, BarChart3, Activity, Inbox
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, LineChart, Line, Legend, AreaChart, Area
+  PieChart, Pie, Cell, Legend, AreaChart, Area
 } from 'recharts';
 
 const COLORS = ['#2E75B6', '#1B3A6B', '#16A34A', '#D97706', '#DC2626', '#8b5cf6'];

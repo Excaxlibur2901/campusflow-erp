@@ -63,7 +63,13 @@ export function AuthProvider({ children }) {
       return { success: false, error: 'Invalid email or password. Please check your credentials.' };
     }
 
-    const { password: _pw, ...safeUser } = account;
+    const safeUser = {
+      email: account.email,
+      name: account.name,
+      role: account.role,
+      initials: account.initials,
+      dept: account.dept,
+    };
     setUser(safeUser);
     return { success: true, user: safeUser };
   };
@@ -107,7 +113,13 @@ export function AuthProvider({ children }) {
     localStorage.setItem('cf_registered_accounts', JSON.stringify(userCreatedOnly));
 
     // Automatically log in newly registered user
-    const { password: _pw, ...safeUser } = newAccount;
+    const safeUser = {
+      email: newAccount.email,
+      name: newAccount.name,
+      role: newAccount.role,
+      initials: newAccount.initials,
+      dept: newAccount.dept,
+    };
     setUser(safeUser);
     return { success: true, user: safeUser };
   };

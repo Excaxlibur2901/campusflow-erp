@@ -18,12 +18,12 @@ export default function AttendancePage() {
   // Set defaults when departments load
   useEffect(() => {
     if (departments.length > 0 && !selectedDept) setSelectedDept(departments[0].code);
-  }, [departments]);
+  }, [departments, selectedDept]);
 
   useEffect(() => {
     const deptSubs = subjectsList.filter(s => s.dept === selectedDept);
     if (deptSubs.length > 0 && !deptSubs.find(s => s.code === selectedSubject)) setSelectedSubject(deptSubs[0].code);
-  }, [selectedDept, subjectsList]);
+  }, [selectedDept, selectedSubject, subjectsList]);
 
   const sectionStudents = useMemo(() =>
     studentsList.filter(s => s.section === selectedSection && s.dept === selectedDept),
@@ -33,7 +33,7 @@ export default function AttendancePage() {
   useEffect(() => {
     setRecords(sectionStudents.map(s => ({ ...s, status: 'present' })));
     setSubmitted(false);
-  }, [selectedSection, selectedDept, studentsList.length]);
+  }, [sectionStudents, selectedSection, selectedDept, studentsList.length]);
 
   const toggleStatus = (id) => {
     if (submitted) return;

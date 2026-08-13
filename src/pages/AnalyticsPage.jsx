@@ -1,14 +1,11 @@
 import { useMemo } from 'react';
 import { useData } from '../context/DataContext';
-import { useAuth } from '../context/AuthContext';
 import { downloadOfficialFile } from '../utils/officialDownloads';
 import { BarChart3, TrendingUp, Download, Inbox } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, Legend
 } from 'recharts';
-
-const COLORS = ['#2E75B6','#1B3A6B','#16A34A','#D97706','#DC2626','#8b5cf6'];
 
 function EmptyChart({ message }) {
   return (
@@ -20,7 +17,6 @@ function EmptyChart({ message }) {
 }
 
 export default function AnalyticsPage() {
-  const { user } = useAuth();
   const { departments, facultyList, studentsList, examsList, attendanceHistory, settings, showToast } = useData();
 
   // Real department performance from actual data

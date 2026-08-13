@@ -925,7 +925,7 @@ export const downloadTimetableDocument = (format, { settings, department, year, 
 /*  5. Seating Document                                                */
 /* ------------------------------------------------------------------ */
 
-export const downloadSeatingDocument = (format, { settings, exam, allocations, classrooms }) => {
+export const downloadSeatingDocument = (format, { settings, exam, allocations, classrooms: _classrooms }) => {
   const seatingRef = generateRef('SEA');
   const allocationList = allocations || [];
 

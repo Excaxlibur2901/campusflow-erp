@@ -4,7 +4,7 @@ import { useData } from '../context/DataContext';
 import CollegeHeader from '../components/CollegeHeader';
 import {
   Shield, Clock, FileCheck, Zap, Eye, EyeOff, LogIn, UserPlus,
-  Home, ArrowRight, Award, BookOpen, ChevronDown, CheckCircle2, Search, Sparkles
+  Home, ChevronDown, CheckCircle2, Search, Sparkles
 } from 'lucide-react';
 
 export default function LoginPage() {

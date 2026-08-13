@@ -8,6 +8,7 @@
     "client": "vite",
     "server": "node server/index.js",
     "db:up": "docker compose up -d postgres",
+    "db:migrate": "node server/migrate.js",
     "db:down": "docker compose down",
     "build": "vite build",
     "lint": "eslint .",

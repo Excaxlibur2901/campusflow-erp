@@ -41,7 +41,7 @@ export default function DocumentsPage() {
     documents, generateDocument, showToast, settings,
     studentsList, examsList, departments,
     timetableSlots, seatAllocations, attendanceHistory,
-    subjectsList, classroomsList,
+    classroomsList,
   } = useData();
   const { user } = useAuth();
 

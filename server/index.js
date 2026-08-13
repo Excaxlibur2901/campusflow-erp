@@ -2,6 +2,7 @@ import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
 import { getState, initDatabase, patchState, pool, resetState } from './db.js';
+import { runMigrations } from './migrations.js';
 
 const app = express();
 const port = Number(process.env.API_PORT ?? 4000);
@@ -52,7 +53,8 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: 'Database request failed.' });
 });
 
-initDatabase()
+runMigrations(pool)
+  .then(initDatabase)
   .then(() => {
     app.listen(port, () => {
       console.log(`CampusFlow API running on http://localhost:${port}`);
