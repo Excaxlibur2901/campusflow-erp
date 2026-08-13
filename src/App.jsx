@@ -97,14 +97,25 @@ function AppLayout() {
   );
 }
 
+/**
+ * Inner wrapper: has access to AuthContext so it can pass getAccessToken to DataProvider.
+ * This avoids circular context dependencies.
+ */
+function AppWithAuth() {
+  const { getAccessToken } = useAuth();
+  return (
+    <DataProvider getAccessToken={getAccessToken}>
+      <BrowserRouter>
+        <AppLayout />
+      </BrowserRouter>
+    </DataProvider>
+  );
+}
+
 export default function App() {
   return (
     <AuthProvider>
-      <DataProvider>
-        <BrowserRouter>
-          <AppLayout />
-        </BrowserRouter>
-      </DataProvider>
+      <AppWithAuth />
     </AuthProvider>
   );
 }

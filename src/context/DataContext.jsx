@@ -4,6 +4,9 @@ import { defaultState } from '../data/defaultState';
 const DataContext = createContext(null);
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
+/** Ref to the current access token — injected by DataProvider after auth. */
+const accessTokenRef = { current: null };
+
 const cacheKey = (key) => `cf_${key}`;
 
 const load = (key, fallback) => {
@@ -20,17 +23,24 @@ const save = (key, val) => {
 };
 
 const patchRemote = async (patch) => {
+  const token = accessTokenRef.current;
   const response = await fetch(`${API_BASE}/api/state`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify(patch),
   });
 
+  // 401 means session expired — don't throw data-sync error, just silently fail
+  if (response.status === 401) return;
   if (!response.ok) throw new Error('Unable to save data to PostgreSQL.');
   return response.json();
 };
 
-export function DataProvider({ children }) {
+export function DataProvider({ children, getAccessToken }) {
   const [dataLoading, setDataLoading] = useState(true);
   const [dataError, setDataError] = useState('');
   const [setupDone, setSetupDone] = useState(() => load('setupDone', defaultState.setupDone));
@@ -66,16 +76,30 @@ export function DataProvider({ children }) {
     setSettingsRaw(state.settings ?? defaultState.settings);
   }, []);
 
+  // Keep accessTokenRef in sync with the latest token from AuthContext
+  useEffect(() => {
+    accessTokenRef.current = getAccessToken?.() ?? null;
+  });
+
   useEffect(() => {
     let active = true;
 
-    fetch(`${API_BASE}/api/state`)
+    const token = getAccessToken?.();
+    fetch(`${API_BASE}/api/state`, {
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
       .then((response) => {
+        if (response.status === 401) {
+          // Not authenticated yet — use cached localStorage state
+          if (active) setDataLoading(false);
+          return null;
+        }
         if (!response.ok) throw new Error('Unable to load PostgreSQL data.');
         return response.json();
       })
       .then((state) => {
-        if (!active) return;
+        if (!active || !state) return;
         applyState(state);
         Object.entries(state).forEach(([key, value]) => save(key, value));
         setDataError('');
@@ -90,6 +114,7 @@ export function DataProvider({ children }) {
     return () => {
       active = false;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyState]);
 
   const persist = useCallback((patch) => {
@@ -172,8 +197,13 @@ export function DataProvider({ children }) {
   };
 
   const resetAll = async () => {
+    const token = getAccessToken?.();
     try {
-      await fetch(`${API_BASE}/api/reset`, { method: 'POST' });
+      await fetch(`${API_BASE}/api/reset`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
     } finally {
       Object.keys(localStorage).filter(k => k.startsWith('cf_')).forEach(k => localStorage.removeItem(k));
       window.location.reload();

@@ -1,18 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useData } from '../context/DataContext';
 import CollegeHeader from '../components/CollegeHeader';
 import {
-  Shield, Clock, FileCheck, Zap, Eye, EyeOff, LogIn, UserPlus,
-  Home, ChevronDown, CheckCircle2, Search, Sparkles
+  Shield, Clock, FileCheck, Zap, Eye, EyeOff, LogIn,
+  Home, CheckCircle2, Search, Building2, UserPlus,
 } from 'lucide-react';
 
 export default function LoginPage() {
-  const { login, registerAccount, defaultAccounts } = useAuth();
-  const { settings } = useData();
+  const { login, registerAccount, fetchInstitutions } = useAuth();
 
   // Mode: 'login' | 'register' | 'home'
   const [mode, setMode] = useState('login');
+
+  // Account Type for Registration: 'user' | 'institution'
+  const [accountType, setAccountType] = useState('user');
 
   // Login form state
   const [email, setEmail] = useState('');
@@ -26,84 +27,115 @@ export default function LoginPage() {
   const [regDept, setRegDept] = useState('CSE');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
+  const [regInstId, setRegInstId] = useState('');
+  const [regInstName, setRegInstName] = useState('');
+
+  // Loaded Institutions
+  const [institutions, setInstitutions] = useState([]);
 
   // UI state
-  const [showQuickFill, setShowQuickFill] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
 
   // Verification state for Public Home Page
   const [verifyDocId, setVerifyDocId] = useState('');
-  const [verifyResult, setVerifyResult] = useState(null);
+
+  // Fetch registered institutions when switching to register mode
+  useEffect(() => {
+    if (mode === 'register' && fetchInstitutions) {
+      fetchInstitutions().then((list) => {
+        if (Array.isArray(list)) {
+          setInstitutions(list);
+          if (list.length > 0 && !regInstId) {
+            setRegInstId(list[0].id);
+          }
+        }
+      });
+    }
+  }, [mode, fetchInstitutions, regInstId]);
 
   const features = [
-    { icon: <Zap size={18} color="#60a5fa" />, text: 'AI-powered timetable generation in seconds' },
-    { icon: <Shield size={18} color="#60a5fa" />, text: 'Intelligent exam seating with anti-cheat mixing' },
-    { icon: <FileCheck size={18} color="#60a5fa" />, text: 'QR-verified official documents instantly' },
-    { icon: <Clock size={18} color="#60a5fa" />, text: '80% reduction in administrative workflow time' },
+    { icon: <Zap size={18} color="#60a5fa" />, text: 'Multi-tenant cloud ERP for higher education institutions' },
+    { icon: <Shield size={18} color="#60a5fa" />, text: 'Score-based exam seating & clash-free timetable solver' },
+    { icon: <FileCheck size={18} color="#60a5fa" />, text: 'QR-verifiable official academic document issuance' },
+    { icon: <Clock size={18} color="#60a5fa" />, text: 'Automated attendance tracking & defaulter analytics' },
   ];
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
-
-    setTimeout(() => {
-      const result = login(email, password);
+    try {
+      const result = await login(email, password);
       if (!result.success) {
         setError(result.error);
       }
+    } catch {
+      setError('Unable to connect to the server. Please try again.');
+    } finally {
       setLoading(false);
-    }, 400);
+    }
   };
 
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
 
+    if (!regName.trim()) {
+      setError('Full name is required.');
+      return;
+    }
+    if (!regEmail.trim()) {
+      setError('Institutional email address is required.');
+      return;
+    }
+    if (!regPassword || regPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
     if (regPassword !== regConfirmPassword) {
       setError('Passwords do not match. Please re-enter your password.');
       return;
     }
 
+    if (accountType === 'institution' && !regInstName.trim()) {
+      setError('College / Institution name is required.');
+      return;
+    }
+
     setLoading(true);
 
-    setTimeout(() => {
-      const result = registerAccount({
-        name: regName,
-        email: regEmail,
+    try {
+      const payload = {
+        accountType,
+        fullName: regName.trim(),
+        email: regEmail.trim(),
         password: regPassword,
-        role: regRole,
-        dept: regDept,
-      });
+        role: accountType === 'institution' ? 'SUPER_ADMIN' : regRole,
+        department: regDept,
+        institutionId: accountType === 'user' ? regInstId || undefined : undefined,
+        institutionName: accountType === 'institution' ? regInstName.trim() : undefined,
+      };
 
+      const result = await registerAccount(payload);
       if (!result.success) {
         setError(result.error);
       } else {
-        setSuccessMsg('Account created successfully! Logging you in...');
+        setSuccessMsg('Account created successfully! Signing you in...');
       }
+    } catch {
+      setError('Unable to complete registration. Please try again.');
+    } finally {
       setLoading(false);
-    }, 400);
-  };
-
-  const handleFillAccount = (acc) => {
-    setEmail(acc.email);
-    setPassword(acc.password);
-    setShowQuickFill(false);
-    setError('');
+    }
   };
 
   const handleVerify = (e) => {
     e.preventDefault();
     if (!verifyDocId.trim()) return;
-    setVerifyResult({
-      id: verifyDocId.toUpperCase(),
-      status: 'VERIFIED OFFICIAL DOCUMENT',
-      issuer: settings.institutionName || 'CampusFlow Academic Authority',
-      date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
-      hash: '0x' + Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join(''),
-    });
+    window.open(`/api/verify/document/${verifyDocId.trim()}`, '_blank', 'noopener,noreferrer');
   };
 
   // Render Public Home Landing Page if mode === 'home'
@@ -117,23 +149,17 @@ export default function LoginPage() {
           position: 'sticky', top: 0, zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }} onClick={() => setMode('home')}>
-            {settings.collegeLogo ? (
-              <img src={settings.collegeLogo} alt="Logo" style={{ width: 40, height: 40, objectFit: 'contain' }} />
-            ) : (
-              <div style={{
-                width: 38, height: 38, borderRadius: 8,
-                background: 'linear-gradient(135deg, #1B3A6B, #2E75B6)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontWeight: 800, fontSize: 16, color: '#fff'
-              }}>{(settings.institutionName || 'CF').substring(0, 2).toUpperCase()}</div>
-            )}
+            <div style={{
+              width: 38, height: 38, borderRadius: 8,
+              background: 'linear-gradient(135deg, #1B3A6B, #2E75B6)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 800, fontSize: 16, color: '#fff'
+            }}>CF</div>
             <div>
               <div style={{ fontSize: 16, fontWeight: 800, color: '#1B3A6B' }}>
-                {settings.institutionName || 'CampusFlow ERP'}
+                CampusFlow Universal ERP
               </div>
-              {settings.affiliation && (
-                <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{settings.affiliation}</div>
-              )}
+              <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Multi-Tenant Academic Operations Platform</div>
             </div>
           </div>
 
@@ -150,7 +176,7 @@ export default function LoginPage() {
         {/* Hero Banner with Official Header */}
         <section style={{ background: '#fff', padding: '32px 24px', borderBottom: '1px solid var(--border)' }}>
           <div style={{ maxWidth: 1000, margin: '0 auto' }}>
-            <CollegeHeader variant="document" title="PUBLIC INSTITUTIONAL PORTAL" subtitle="Official Academic Information & Document Verification System" />
+            <CollegeHeader variant="document" title="UNIVERSAL ACADEMIC PORTAL" subtitle="Multi-Institutional Academic Operations & Official Document Verification System" />
           </div>
         </section>
 
@@ -159,24 +185,24 @@ export default function LoginPage() {
           {/* Announcement / Notice Board */}
           <div className="card">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-              <Sparkles color="var(--accent)" size={20} />
-              <h3 style={{ fontSize: 16, fontWeight: 700 }}>Notice Board & Updates</h3>
+              <CheckCircle2 color="var(--accent)" size={20} />
+              <h3 style={{ fontSize: 16, fontWeight: 700 }}>Universal Platform System Status</h3>
             </div>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
               <li style={{ paddingBottom: 12, borderBottom: '1px dashed var(--border)' }}>
-                <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>ACADEMIC CALENDAR</div>
-                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>Mid-Semester Examinations Schedule Released</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Check student dashboard for seating arrangements and timetables.</div>
+                <div style={{ fontSize: 11, color: 'var(--accent)', fontWeight: 600 }}>MULTI-TENANT ARCHITECTURE</div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>Universal College Onboarding & Cloud Access</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Institutions can register and manage autonomous campus operations securely.</div>
               </li>
               <li style={{ paddingBottom: 12, borderBottom: '1px dashed var(--border)' }}>
-                <div style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>ACCREDITATION</div>
-                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>NAAC {settings.naacGrade || 'A+'} Grade Accreditation Renewed</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Valid for all engineering and technology departments.</div>
+                <div style={{ fontSize: 11, color: 'var(--success)', fontWeight: 600 }}>ACCREDITATION & STANDARDS</div>
+                <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>NAAC & NBA Compliant Workflows</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Standardized curriculum, outcome tracking, and exam seating algorithms.</div>
               </li>
               <li>
                 <div style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 600 }}>DIGITAL CERTIFICATES</div>
                 <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>QR-Verified Document Issuance System Live</div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Employers and universities can verify bonafide & transcripts below.</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Employers and universities can verify bonafides & transcripts in real time.</div>
               </li>
             </ul>
           </div>
@@ -193,7 +219,7 @@ export default function LoginPage() {
             <form onSubmit={handleVerify} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <input
                 className="form-input"
-                placeholder="e.g. DOC-2026-CSE-884"
+                placeholder="e.g. CF-2026-000001"
                 value={verifyDocId}
                 onChange={(e) => setVerifyDocId(e.target.value)}
                 style={{ flex: 1 }}
@@ -203,23 +229,15 @@ export default function LoginPage() {
               </button>
             </form>
 
-            {verifyResult && (
-              <div style={{ padding: 14, borderRadius: 8, background: '#f0fdf4', border: '1px solid #bbf7d0', fontSize: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#166534', fontWeight: 700, marginBottom: 4 }}>
-                  <CheckCircle2 size={16} /> {verifyResult.status}
-                </div>
-                <div style={{ color: '#374151' }}>Doc Ref: <strong>{verifyResult.id}</strong></div>
-                <div style={{ color: '#374151' }}>Issuer: {verifyResult.issuer}</div>
-                <div style={{ color: '#374151' }}>Issued Date: {verifyResult.date}</div>
-                <div style={{ color: '#6b7280', fontSize: 10, marginTop: 4, fontFamily: 'monospace' }}>SHA256: {verifyResult.hash}</div>
-              </div>
-            )}
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, textAlign: 'center' }}>
+              Verification opens in a new tab with the document status from the server.
+            </div>
           </div>
         </section>
 
         {/* Footer */}
         <footer style={{ textTransform: 'none', background: '#fff', borderTop: '1px solid var(--border)', textAlign: 'center', padding: '24px 16px', marginTop: 48, fontSize: 12, color: 'var(--text-muted)' }}>
-          {settings.institutionName || 'CampusFlow ERP'} · Official Institutional Portal · All Rights Reserved
+          CampusFlow Universal ERP · Multi-Institutional Academic Operations Platform · All Rights Reserved
         </footer>
       </div>
     );
@@ -241,37 +259,28 @@ export default function LoginPage() {
       </div>
 
       <div className="login-left">
-        {/* College branding */}
+        {/* College / Universal branding */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 36 }}>
-          {settings.collegeLogo ? (
-            <img src={settings.collegeLogo} alt="Logo" style={{
-              width: 56, height: 56, borderRadius: 14, objectFit: 'contain',
-              background: '#fff', padding: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-            }} />
-          ) : (
-            <div style={{
-              width: 48, height: 48, borderRadius: 12,
-              background: 'linear-gradient(135deg, #2E75B6, #60a5fa)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 800, fontSize: 20, color: '#fff'
-            }}>{(settings.institutionName || 'CF').substring(0, 2).toUpperCase()}</div>
-          )}
+          <div style={{
+            width: 48, height: 48, borderRadius: 12,
+            background: 'linear-gradient(135deg, #2E75B6, #60a5fa)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 800, fontSize: 20, color: '#fff'
+          }}>CF</div>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>
-              {settings.institutionName || 'CampusFlow ERP'}
+              CampusFlow Universal ERP
             </div>
-            {settings.affiliation && (
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
-                {settings.affiliation}
-              </div>
-            )}
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>
+              Universal Higher Education Cloud Platform
+            </div>
           </div>
         </div>
 
         <h1>Smart Campus<br />Operations, <span>Simplified.</span></h1>
         <p style={{ marginTop: 8 }}>
-          The unified platform for timetable scheduling, exam seating, attendance tracking,
-          and official document generation — purpose-built for engineering colleges.
+          The multi-tenant cloud platform for timetable scheduling, exam seating, attendance tracking,
+          and official document generation — built for engineering & autonomous institutions.
         </p>
         <div className="login-features">
           {features.map((f, i) => (
@@ -282,30 +291,22 @@ export default function LoginPage() {
           ))}
         </div>
 
-        {/* Accreditation badges */}
-        {(settings.naacGrade || settings.aisheCode || settings.autonomousStatus) && (
-          <div style={{ display: 'flex', gap: 12, marginTop: 32, flexWrap: 'wrap' }}>
-            {settings.naacGrade && (
-              <div style={{ padding: '6px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', fontSize: 12, color: '#fff', fontWeight: 600 }}>
-                NAAC: {settings.naacGrade}
-              </div>
-            )}
-            {settings.autonomousStatus && (
-              <div style={{ padding: '6px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', fontSize: 12, color: '#fff', fontWeight: 600 }}>
-                {settings.autonomousStatus}
-              </div>
-            )}
-            {settings.aisheCode && (
-              <div style={{ padding: '6px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', fontSize: 12, color: '#fff', fontWeight: 600 }}>
-                AISHE: {settings.aisheCode}
-              </div>
-            )}
+        {/* Badges */}
+        <div style={{ display: 'flex', gap: 12, marginTop: 32, flexWrap: 'wrap' }}>
+          <div style={{ padding: '6px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', fontSize: 12, color: '#fff', fontWeight: 600 }}>
+            Universal Multi-Tenant ERP
           </div>
-        )}
+          <div style={{ padding: '6px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', fontSize: 12, color: '#fff', fontWeight: 600 }}>
+            NAAC / NBA Compatible
+          </div>
+          <div style={{ padding: '6px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)', fontSize: 12, color: '#fff', fontWeight: 600 }}>
+            QR Digital Verification
+          </div>
+        </div>
       </div>
 
       <div className="login-right">
-        <div className="login-card" style={{ maxWidth: 440, width: '100%' }}>
+        <div className="login-card" style={{ maxWidth: 460, width: '100%' }}>
           {/* Mode Switcher Tabs */}
           <div style={{
             display: 'flex', background: 'var(--bg-main)', padding: 4, borderRadius: 10, marginBottom: 24, gap: 4
@@ -321,6 +322,7 @@ export default function LoginPage() {
               }}
               onClick={() => { setMode('login'); setError(''); setSuccessMsg(''); }}
             >
+              <LogIn size={14} style={{ display: 'inline', marginRight: 6 }} />
               Sign In
             </button>
             <button
@@ -334,6 +336,7 @@ export default function LoginPage() {
               }}
               onClick={() => { setMode('register'); setError(''); setSuccessMsg(''); }}
             >
+              <UserPlus size={14} style={{ display: 'inline', marginRight: 6 }} />
               Create Account
             </button>
           </div>
@@ -414,7 +417,7 @@ export default function LoginPage() {
                 <button
                   type="button"
                   style={{ fontSize: 13, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 500, padding: 0 }}
-                  onClick={() => setError('Please contact your system administrator to reset your password.')}
+                  onClick={() => setError('Please contact your institution administrator to reset your password.')}
                 >
                   Forgot password?
                 </button>
@@ -427,49 +430,6 @@ export default function LoginPage() {
                   <><LogIn size={16} /> Sign In</>
                 )}
               </button>
-
-              {/* Quick Fill Dropdown Helper for testing roles */}
-              <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px border-subtle' }}>
-                <button
-                  type="button"
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%',
-                    background: 'var(--bg-main)', border: '1px solid var(--border)', borderRadius: 8,
-                    padding: '8px 12px', fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', fontWeight: 600
-                  }}
-                  onClick={() => setShowQuickFill(!showQuickFill)}
-                >
-                  <span>🔑 Select Institutional Sample Account</span>
-                  <ChevronDown size={14} style={{ transform: showQuickFill ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-                </button>
-
-                {showQuickFill && (
-                  <div style={{
-                    marginTop: 8, background: '#fff', border: '1px solid var(--border)', borderRadius: 8,
-                    overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.06)'
-                  }}>
-                    {defaultAccounts.map((acc, idx) => (
-                      <div
-                        key={idx}
-                        style={{
-                          padding: '8px 12px', borderBottom: idx < defaultAccounts.length - 1 ? '1px solid var(--border)' : 'none',
-                          cursor: 'pointer', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                          transition: 'background 0.15s'
-                        }}
-                        onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-main)'}
-                        onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}
-                        onClick={() => handleFillAccount(acc)}
-                      >
-                        <div>
-                          <strong style={{ color: 'var(--primary)' }}>{acc.role}</strong>
-                          <div style={{ color: 'var(--text-muted)', fontSize: 11 }}>{acc.email}</div>
-                        </div>
-                        <span className="badge badge-neutral" style={{ fontSize: 10 }}>Fill</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
 
               <div style={{ textAlign: 'center', marginTop: 20, fontSize: 13, color: 'var(--text-muted)' }}>
                 Don't have an institutional account?{' '}
@@ -488,7 +448,74 @@ export default function LoginPage() {
           {mode === 'register' && (
             <form onSubmit={handleRegister} noValidate>
               <h2 style={{ fontSize: 20, fontWeight: 800 }}>Create Account</h2>
-              <p className="subtitle" style={{ marginBottom: 20 }}>Register for institutional ERP access</p>
+              <p className="subtitle" style={{ marginBottom: 16 }}>Register for institutional ERP access</p>
+
+              {/* Account Type Selector */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                <button
+                  type="button"
+                  style={{
+                    flex: 1, padding: '6px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+                    border: '1px solid var(--border)', cursor: 'pointer',
+                    background: accountType === 'user' ? 'var(--primary)' : '#fff',
+                    color: accountType === 'user' ? '#fff' : 'var(--text-primary)',
+                  }}
+                  onClick={() => setAccountType('user')}
+                >
+                  Student / Staff Account
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    flex: 1, padding: '6px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+                    border: '1px solid var(--border)', cursor: 'pointer',
+                    background: accountType === 'institution' ? 'var(--primary)' : '#fff',
+                    color: accountType === 'institution' ? '#fff' : 'var(--text-primary)',
+                  }}
+                  onClick={() => setAccountType('institution')}
+                >
+                  <Building2 size={12} style={{ display: 'inline', marginRight: 4 }} />
+                  Register New College
+                </button>
+              </div>
+
+              {accountType === 'institution' ? (
+                <div className="form-group">
+                  <label className="form-label">College / Institution Name</label>
+                  <input
+                    type="text" className="form-input"
+                    placeholder="e.g. St. Xavier's Institute of Technology"
+                    value={regInstName}
+                    onChange={(e) => { setRegInstName(e.target.value); setError(''); }}
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label className="form-label">Select Institution</label>
+                  {institutions.length > 0 ? (
+                    <select
+                      className="form-select"
+                      value={regInstId}
+                      onChange={(e) => setRegInstId(e.target.value)}
+                    >
+                      {institutions.map((inst) => (
+                        <option key={inst.id} value={inst.id}>
+                          {inst.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g. CampusFlow University"
+                      value={regInstName}
+                      onChange={(e) => setRegInstName(e.target.value)}
+                    />
+                  )}
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Full Name</label>
@@ -512,31 +539,33 @@ export default function LoginPage() {
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <div className="form-group">
-                  <label className="form-label">Role</label>
-                  <select className="form-select" value={regRole} onChange={(e) => setRegRole(e.target.value)}>
-                    <option value="Student">Student</option>
-                    <option value="Faculty">Faculty</option>
-                    <option value="HOD">HOD</option>
-                    <option value="Exam Cell">Exam Cell</option>
-                    <option value="Principal">Principal</option>
-                    <option value="Super Admin">Super Admin</option>
-                  </select>
+              {accountType === 'user' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                  <div className="form-group">
+                    <label className="form-label">Institutional Role</label>
+                    <select className="form-select" value={regRole} onChange={(e) => setRegRole(e.target.value)}>
+                      <option value="Student">Student</option>
+                      <option value="Faculty">Faculty</option>
+                      <option value="HOD">HOD</option>
+                      <option value="Exam Cell">Exam Cell</option>
+                      <option value="Principal">Principal</option>
+                      <option value="Super Admin">Super Admin</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Department</label>
+                    <select className="form-select" value={regDept} onChange={(e) => setRegDept(e.target.value)}>
+                      <option value="CSE">CSE</option>
+                      <option value="ECE">ECE</option>
+                      <option value="ME">Mechanical</option>
+                      <option value="EEE">EEE</option>
+                      <option value="Civil">Civil</option>
+                      <option value="Exam">Exam Cell</option>
+                      <option value="All">All Departments</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Department</label>
-                  <select className="form-select" value={regDept} onChange={(e) => setRegDept(e.target.value)}>
-                    <option value="CSE">CSE</option>
-                    <option value="ECE">ECE</option>
-                    <option value="ME">Mechanical</option>
-                    <option value="EEE">EEE</option>
-                    <option value="Civil">Civil</option>
-                    <option value="Exam">Exam Cell</option>
-                    <option value="All">All Departments</option>
-                  </select>
-                </div>
-              </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label">Password</label>
@@ -564,7 +593,7 @@ export default function LoginPage() {
                 {loading ? (
                   <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Creating Account...</>
                 ) : (
-                  <><UserPlus size={16} /> Register & Sign In</>
+                  <><UserPlus size={16} /> {accountType === 'institution' ? 'Register College & Admin' : 'Register & Sign In'}</>
                 )}
               </button>
 
@@ -582,7 +611,7 @@ export default function LoginPage() {
           )}
 
           <p style={{ textAlign: 'center', marginTop: 20, fontSize: 12, color: 'var(--text-muted)' }}>
-            {settings.institutionName || 'CampusFlow ERP'} · Secure Portal
+            CampusFlow Universal ERP · Multi-Institutional Cloud Platform
           </p>
         </div>
       </div>

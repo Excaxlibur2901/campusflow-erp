@@ -1,136 +1,210 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+/**
+ * AuthContext — CampusFlow ERP
+ *
+ * Provides real server-backed authentication.
+ *   - Access token is stored in memory only (never localStorage).
+ *   - Refresh token lives in an HttpOnly server cookie (not readable by JS).
+ *   - login() calls POST /api/auth/login
+ *   - logout() calls POST /api/auth/logout
+ *   - On mount, silently attempts POST /api/auth/refresh to restore session.
+ *   - Exposes refreshToken() for axios/fetch interceptors to use before retrying.
+ *
+ * SECURITY: No hardcoded credentials. No plaintext passwords. No localStorage tokens.
+ */
+
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 const AuthContext = createContext(null);
 
-// Default institutional accounts
-const DEFAULT_ACCOUNTS = [
-  { email: 'admin@campusflow.edu', password: 'Admin@123', name: 'System Administrator', role: 'Super Admin', initials: 'SA', dept: 'All' },
-  { email: 'principal@campusflow.edu', password: 'Admin@123', name: 'Principal', role: 'Principal', initials: 'PR', dept: 'All' },
-  { email: 'hod@campusflow.edu', password: 'Admin@123', name: 'Head of Department', role: 'HOD', initials: 'HD', dept: 'CSE' },
-  { email: 'faculty@campusflow.edu', password: 'Admin@123', name: 'Faculty Member', role: 'Faculty', initials: 'FM', dept: 'CSE' },
-  { email: 'exam@campusflow.edu', password: 'Admin@123', name: 'Exam Cell Officer', role: 'Exam Cell', initials: 'EX', dept: 'Exam' },
-  { email: 'student@campusflow.edu', password: 'Admin@123', name: 'Student', role: 'Student', initials: 'ST', dept: 'CSE' },
-];
+const API = (path) => `/api${path}`;
+
+async function apiFetch(path, options = {}) {
+  const res = await fetch(API(path), {
+    credentials: 'include', // send HttpOnly cookie
+    headers: { 'Content-Type': 'application/json', ...options.headers },
+    ...options,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    try {
-      const saved = localStorage.getItem('cf_current_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Access token stored in memory — never in localStorage or sessionStorage
+  const accessTokenRef = useRef(null);
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true); // true while attempting session restore
 
-  const [accounts, setAccounts] = useState(() => {
-    try {
-      const saved = localStorage.getItem('cf_registered_accounts');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        return [...DEFAULT_ACCOUNTS, ...parsed.filter(p => !DEFAULT_ACCOUNTS.some(d => d.email.toLowerCase() === p.email.toLowerCase()))];
-      }
-    } catch {
-      // ignore
-    }
-    return DEFAULT_ACCOUNTS;
-  });
+  // Expose access token getter for DataContext API calls
+  const getAccessToken = useCallback(() => accessTokenRef.current, []);
 
+  /* ── Session restore on page load ───────────────────────────────── */
   useEffect(() => {
-    if (user) {
-      localStorage.setItem('cf_current_user', JSON.stringify(user));
-    } else {
-      localStorage.removeItem('cf_current_user');
+    let cancelled = false;
+    async function restore() {
+      try {
+        const { ok, data } = await apiFetch('/auth/refresh', { method: 'POST' });
+        if (!cancelled && ok) {
+          accessTokenRef.current = data.accessToken;
+          setUser(data.user);
+        }
+      } catch {
+        // No valid session — user stays logged out
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
+    restore();
+    return () => { cancelled = true; };
+  }, []);
+
+  /* ── Proactive token refresh (14-minute cycle for 15-min tokens) ── */
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+      try {
+        const { ok, data } = await apiFetch('/auth/refresh', { method: 'POST' });
+        if (ok) {
+          accessTokenRef.current = data.accessToken;
+          setUser(data.user);
+        } else {
+          // Session expired — force logout
+          setUser(null);
+          accessTokenRef.current = null;
+        }
+      } catch {
+        // Network error — keep existing token until it expires
+      }
+    }, 14 * 60 * 1000);
+    return () => clearInterval(interval);
   }, [user]);
 
-  /**
-   * Validate credentials and log in.
-   * Returns { success: true, user } or { success: false, error: string }
-   */
-  const login = (email, password) => {
-    if (!email || !email.trim()) {
-      return { success: false, error: 'Email address is required.' };
+  /* ── login ──────────────────────────────────────────────────────── */
+  const login = useCallback(async (email, password) => {
+    if (!email?.trim())    return { success: false, error: 'Email address is required.' };
+    if (!password?.length) return { success: false, error: 'Password is required.' };
+
+    const { ok, data } = await apiFetch('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+    });
+
+    if (!ok) return { success: false, error: data.error ?? 'Login failed. Please try again.' };
+
+    accessTokenRef.current = data.accessToken;
+    setUser(data.user);
+    return { success: true, user: data.user };
+  }, []);
+
+  /* ── logout ─────────────────────────────────────────────────────── */
+  const logout = useCallback(async () => {
+    try {
+      await apiFetch('/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessTokenRef.current}` },
+      });
+    } catch {
+      // Best effort — always clear local state
     }
-    if (!password || password.length < 6) {
-      return { success: false, error: 'Password must be at least 6 characters.' };
-    }
-
-    const account = accounts.find(
-      (a) => a.email.toLowerCase() === email.trim().toLowerCase() && a.password === password
-    );
-
-    if (!account) {
-      return { success: false, error: 'Invalid email or password. Please check your credentials.' };
-    }
-
-    const safeUser = {
-      email: account.email,
-      name: account.name,
-      role: account.role,
-      initials: account.initials,
-      dept: account.dept,
-    };
-    setUser(safeUser);
-    return { success: true, user: safeUser };
-  };
-
-  /**
-   * Register a new user account.
-   */
-  const registerAccount = (data) => {
-    const { name, email, password, role, dept } = data;
-    if (!name || !name.trim()) return { success: false, error: 'Full name is required.' };
-    if (!email || !email.trim()) return { success: false, error: 'Institutional email is required.' };
-    if (!password || password.length < 6) return { success: false, error: 'Password must be at least 6 characters.' };
-    if (!role) return { success: false, error: 'Please select your institutional role.' };
-
-    const exists = accounts.some(a => a.email.toLowerCase() === email.trim().toLowerCase());
-    if (exists) {
-      return { success: false, error: 'An account with this email address already exists.' };
-    }
-
-    const nameParts = name.trim().split(' ');
-    const initials = nameParts.length >= 2 
-      ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
-      : name.substring(0, 2).toUpperCase();
-
-    const newAccount = {
-      name: name.trim(),
-      email: email.trim(),
-      password,
-      role,
-      dept: dept || 'CSE',
-      initials,
-    };
-
-    const updatedAccounts = [...accounts, newAccount];
-    setAccounts(updatedAccounts);
-
-    // Save only user-created accounts to localStorage
-    const userCreatedOnly = updatedAccounts.filter(
-      a => !DEFAULT_ACCOUNTS.some(d => d.email.toLowerCase() === a.email.toLowerCase())
-    );
-    localStorage.setItem('cf_registered_accounts', JSON.stringify(userCreatedOnly));
-
-    // Automatically log in newly registered user
-    const safeUser = {
-      email: newAccount.email,
-      name: newAccount.name,
-      role: newAccount.role,
-      initials: newAccount.initials,
-      dept: newAccount.dept,
-    };
-    setUser(safeUser);
-    return { success: true, user: safeUser };
-  };
-
-  const logout = () => {
+    accessTokenRef.current = null;
     setUser(null);
-    localStorage.removeItem('cf_current_user');
+  }, []);
+
+  /* ── refreshToken (for use by API interceptors) ─────────────────── */
+  const refreshToken = useCallback(async () => {
+    const { ok, data } = await apiFetch('/auth/refresh', { method: 'POST' });
+    if (ok) {
+      accessTokenRef.current = data.accessToken;
+      setUser(data.user);
+      return data.accessToken;
+    }
+    setUser(null);
+    accessTokenRef.current = null;
+    return null;
+  }, []);
+
+  /* ── changePassword ─────────────────────────────────────────────── */
+  const changePassword = useCallback(async (currentPassword, newPassword) => {
+    const { ok, data } = await apiFetch('/auth/change-password', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessTokenRef.current}` },
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+    if (!ok) return { success: false, error: data.error ?? 'Failed to change password.' };
+    // Session revoked server-side — force logout
+    accessTokenRef.current = null;
+    setUser(null);
+    return { success: true };
+  }, []);
+
+  /* ── registerAccount ────────────────────────────────────────────── */
+  const registerAccount = useCallback(async (formData) => {
+    const { ok, data: resData } = await apiFetch('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(formData),
+    });
+
+    if (!ok) return { success: false, error: resData.error ?? 'Registration failed.' };
+
+    accessTokenRef.current = resData.accessToken;
+    setUser(resData.user);
+    return { success: true, user: resData.user };
+  }, []);
+
+  /* ── fetchInstitutions ───────────────────────────────────────────── */
+  const fetchInstitutions = useCallback(async () => {
+    const { ok, data } = await apiFetch('/auth/institutions');
+    if (ok && Array.isArray(data)) return data;
+    return [];
+  }, []);
+
+  /* ── First-run setup (called from SetupWizard) ──────────────────── */
+  const runSetup = useCallback(async ({ institutionName, adminName, adminEmail, adminPassword }) => {
+    const { ok, data } = await apiFetch('/auth/setup', {
+      method: 'POST',
+      body: JSON.stringify({ institutionName, adminName, adminEmail, adminPassword }),
+    });
+    if (!ok) return { success: false, error: data.error ?? 'Setup failed.' };
+    return { success: true };
+  }, []);
+
+  const value = {
+    user,
+    loading,
+    login,
+    logout,
+    registerAccount,
+    fetchInstitutions,
+    refreshToken,
+    changePassword,
+    runSetup,
+    getAccessToken,
+    isAuthenticated: !!user,
+    // Role helpers
+    isSuperAdmin: user?.roles?.includes('SUPER_ADMIN') ?? false,
+    isPrincipal:  user?.roles?.includes('PRINCIPAL')   ?? false,
+    isHOD:        user?.roles?.includes('HOD')         ?? false,
+    isFaculty:    user?.roles?.includes('FACULTY')     ?? false,
+    isExamCell:   user?.roles?.includes('EXAM_CELL')   ?? false,
+    isStudent:    user?.roles?.includes('STUDENT')     ?? false,
   };
+
+  // Show nothing while checking existing session to avoid login flicker
+  if (loading) {
+    return (
+      <AuthContext.Provider value={value}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--bg-primary, #0f172a)', color: '#94a3b8', fontFamily: 'Inter, sans-serif' }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🎓</div>
+            <div>CampusFlow ERP</div>
+            <div style={{ fontSize: 12, marginTop: 4, opacity: 0.6 }}>Restoring session…</div>
+          </div>
+        </div>
+      </AuthContext.Provider>
+    );
+  }
 
   return (
-    <AuthContext.Provider value={{ user, login, registerAccount, logout, defaultAccounts: DEFAULT_ACCOUNTS }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
