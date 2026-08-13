@@ -43,8 +43,8 @@ function ToastContainer() {
 }
 
 function AppLayout() {
-  const { user } = useAuth();
-  const { setupDone, dataLoading, dataError } = useData();
+  const { user, setupDone } = useAuth();
+  const { dataLoading, dataError } = useData();
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
 

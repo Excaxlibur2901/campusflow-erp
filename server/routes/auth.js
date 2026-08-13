@@ -19,8 +19,19 @@ import { auditLog } from '../utils/audit.js';
 
 const router = Router();
 
-const ACCESS_SECRET = process.env.AUTH_ACCESS_TOKEN_SECRET;
-const REFRESH_SECRET = process.env.AUTH_REFRESH_TOKEN_SECRET;
+export function validateAuthSecrets() {
+  if (!process.env.AUTH_ACCESS_TOKEN_SECRET?.trim()) {
+    console.error('FATAL: AUTH_ACCESS_TOKEN_SECRET is missing');
+    throw new Error('AUTH_ACCESS_TOKEN_SECRET is missing');
+  }
+  if (!process.env.AUTH_REFRESH_TOKEN_SECRET?.trim()) {
+    console.error('FATAL: AUTH_REFRESH_TOKEN_SECRET is missing');
+    throw new Error('AUTH_REFRESH_TOKEN_SECRET is missing');
+  }
+}
+
+validateAuthSecrets();
+
 const BCRYPT_COST = Number(process.env.BCRYPT_COST ?? 12);
 const COOKIE_NAME = process.env.SESSION_COOKIE_NAME || 'campusflow_session';
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -37,16 +48,32 @@ const REFRESH_COOKIE_OPTIONS = {
 
 /** Generate a signed access JWT */
 function signAccess(userId, roles) {
-  return jwt.sign({ sub: userId, roles }, ACCESS_SECRET, { expiresIn: ACCESS_TTL_S });
+  try {
+    if (!process.env.AUTH_ACCESS_TOKEN_SECRET?.trim()) {
+      throw new Error('AUTH_ACCESS_TOKEN_SECRET is missing');
+    }
+    return jwt.sign({ sub: userId, roles }, process.env.AUTH_ACCESS_TOKEN_SECRET, { expiresIn: ACCESS_TTL_S });
+  } catch (err) {
+    console.error('[auth] JWT signAccess error:', err.message);
+    throw err;
+  }
 }
 
 /** Generate a signed refresh JWT and return its hash for DB storage */
 function signRefresh(userId) {
-  const token = jwt.sign({ sub: userId, type: 'refresh' }, REFRESH_SECRET, {
-    expiresIn: Math.floor(REFRESH_TTL_MS / 1000),
-  });
-  const hash = crypto.createHash('sha256').update(token).digest('hex');
-  return { token, hash };
+  try {
+    if (!process.env.AUTH_REFRESH_TOKEN_SECRET?.trim()) {
+      throw new Error('AUTH_REFRESH_TOKEN_SECRET is missing');
+    }
+    const token = jwt.sign({ sub: userId, type: 'refresh' }, process.env.AUTH_REFRESH_TOKEN_SECRET, {
+      expiresIn: Math.floor(REFRESH_TTL_MS / 1000),
+    });
+    const hash = crypto.createHash('sha256').update(token).digest('hex');
+    return { token, hash };
+  } catch (err) {
+    console.error('[auth] JWT signRefresh error:', err.message);
+    throw err;
+  }
 }
 
 /* ── GET /api/auth/setup-status ──────────────────────────────────── */
@@ -183,7 +210,9 @@ router.post('/login', async (req, res, next) => {
     if (!email?.trim())      return res.status(400).json({ error: 'Email is required.' });
     if (!password?.length)   return res.status(400).json({ error: 'Password is required.' });
 
-    const ip = req.ip ?? null;
+    const rawIp = req.ip || req.socket?.remoteAddress || null;
+    const cleanIp = (typeof rawIp === 'string' && rawIp.replace(/^::ffff:/, '').trim()) || null;
+    const validIp = (cleanIp === '::1' || /^[0-9.:a-fA-F]+$/.test(cleanIp)) ? cleanIp : null;
     const ua = req.headers['user-agent'] ?? null;
 
     // Fetch user
@@ -202,11 +231,15 @@ router.post('/login', async (req, res, next) => {
     const user = result.rows[0];
 
     const recordAttempt = async (success) => {
-      await pool.query(
-        `INSERT INTO login_attempts (email, success, ip_address, user_agent)
-         VALUES ($1, $2, $3::inet, $4)`,
-        [email.trim().toLowerCase(), success, ip, ua],
-      );
+      try {
+        await pool.query(
+          `INSERT INTO login_attempts (email, success, ip_address, user_agent)
+           VALUES ($1, $2, $3::inet, $4)`,
+          [email.trim().toLowerCase(), success, validIp, ua],
+        );
+      } catch (attErr) {
+        console.warn('[auth] login_attempt insert warning:', attErr.message);
+      }
     };
 
     // Account not found — still hash to prevent timing attacks
@@ -253,13 +286,17 @@ router.post('/login', async (req, res, next) => {
     const { token: refreshToken, hash: refreshHash } = signRefresh(user.id);
 
     // Store refresh token hash in DB
-    await pool.query(
-      `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
-       VALUES ($1, $2, $3, $4::inet, $5)`,
-      [user.id, refreshHash, ua, ip, new Date(Date.now() + REFRESH_TTL_MS)],
-    );
+    try {
+      await pool.query(
+        `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+         VALUES ($1, $2, $3, $4::inet, $5)`,
+        [user.id, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
+      );
+    } catch (sessErr) {
+      console.warn('[auth] user_session login insert warning:', sessErr.message);
+    }
 
-    await auditLog({ userId: user.id, action: 'LOGIN', module: 'Auth', entity: user.email, ip, ua });
+    await auditLog({ userId: user.id, action: 'LOGIN', module: 'Auth', entity: user.email, ip: validIp, ua });
 
     res.cookie(COOKIE_NAME, refreshToken, REFRESH_COOKIE_OPTIONS);
 
@@ -312,7 +349,7 @@ router.post('/refresh', async (req, res, next) => {
 
     let payload;
     try {
-      payload = jwt.verify(refreshToken, REFRESH_SECRET);
+      payload = jwt.verify(refreshToken, process.env.AUTH_REFRESH_TOKEN_SECRET);
     } catch {
       return res.status(401).json({ error: 'Invalid or expired refresh token.' });
     }

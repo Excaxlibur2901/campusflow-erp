@@ -12,7 +12,7 @@ async function runQaAudit() {
   console.log('─── CampusFlow ERP: Production QA Audit ───\n');
   const results = [];
 
-  let dbConnected = false;
+  let dbConnected;
   try {
     await pool.query('SELECT 1');
     dbConnected = true;

@@ -6,7 +6,6 @@ export function DataProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const [dataLoading] = useState(false);
   const [dataError] = useState('');
-  const [setupDone] = useState(true);
 
   // Settings & Theme UI preferences stored safely in localStorage
   const [settings, setSettingsState] = useState(() => {
@@ -50,7 +49,6 @@ export function DataProvider({ children }) {
   const value = {
     dataLoading,
     dataError,
-    setupDone,
     toasts,
     showToast,
     settings,

@@ -4,10 +4,11 @@
  * Provides real server-backed authentication.
  *   - Access token is stored in memory only (never localStorage).
  *   - Refresh token lives in an HttpOnly server cookie (not readable by JS).
+ *   - setupDone is fetched from GET /api/auth/setup-status (database is source of truth).
  *   - login() calls POST /api/auth/login
  *   - logout() calls POST /api/auth/logout
+ *   - runSetup() calls POST /api/auth/setup and immediately authenticates user.
  *   - On mount, silently attempts POST /api/auth/refresh to restore session.
- *   - Exposes refreshToken() for axios/fetch interceptors to use before retrying.
  *
  * SECURITY: No hardcoded credentials. No plaintext passwords. No localStorage tokens.
  */
@@ -32,20 +33,29 @@ export function AuthProvider({ children }) {
   // Access token stored in memory — never in localStorage or sessionStorage
   const accessTokenRef = useRef(null);
   const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true); // true while attempting session restore
+  const [setupDone, setSetupDone] = useState(false);
+  const [loading, setLoading] = useState(true); // true while attempting session restore & checking setup status
 
-  // Expose access token getter for DataContext API calls
+  // Expose access token getter for API calls
   const getAccessToken = useCallback(() => accessTokenRef.current, []);
 
-  /* ── Session restore on page load ───────────────────────────────── */
+  /* ── Session restore & setup-status check on page load ───────────── */
   useEffect(() => {
     let cancelled = false;
     async function restore() {
       try {
+        // 1. Check database setup-status
+        const { data: statusData } = await apiFetch('/auth/setup-status');
+        if (!cancelled && statusData && typeof statusData.setupDone === 'boolean') {
+          setSetupDone(statusData.setupDone);
+        }
+
+        // 2. Try restoring session via refresh token cookie
         const { ok, data } = await apiFetch('/auth/refresh', { method: 'POST' });
         if (!cancelled && ok) {
           accessTokenRef.current = data.accessToken;
           setUser(data.user);
+          setSetupDone(true);
         }
       } catch {
         // No valid session — user stays logged out
@@ -66,6 +76,7 @@ export function AuthProvider({ children }) {
         if (ok) {
           accessTokenRef.current = data.accessToken;
           setUser(data.user);
+          setSetupDone(true);
         } else {
           // Session expired — force logout
           setUser(null);
@@ -88,10 +99,11 @@ export function AuthProvider({ children }) {
       body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
     });
 
-    if (!ok) return { success: false, error: data.error ?? 'Login failed. Please try again.' };
+    if (!ok) return { success: false, error: data.error ?? 'Invalid email or password.' };
 
     accessTokenRef.current = data.accessToken;
     setUser(data.user);
+    setSetupDone(true);
     return { success: true, user: data.user };
   }, []);
 
@@ -103,7 +115,7 @@ export function AuthProvider({ children }) {
         headers: { Authorization: `Bearer ${accessTokenRef.current}` },
       });
     } catch {
-      // Best effort — always clear local state
+      // Best effort — clear local state
     }
     accessTokenRef.current = null;
     setUser(null);
@@ -115,6 +127,7 @@ export function AuthProvider({ children }) {
     if (ok) {
       accessTokenRef.current = data.accessToken;
       setUser(data.user);
+      setSetupDone(true);
       return data.accessToken;
     }
     setUser(null);
@@ -130,7 +143,6 @@ export function AuthProvider({ children }) {
       body: JSON.stringify({ currentPassword, newPassword }),
     });
     if (!ok) return { success: false, error: data.error ?? 'Failed to change password.' };
-    // Session revoked server-side — force logout
     accessTokenRef.current = null;
     setUser(null);
     return { success: true };
@@ -147,6 +159,7 @@ export function AuthProvider({ children }) {
 
     accessTokenRef.current = resData.accessToken;
     setUser(resData.user);
+    setSetupDone(true);
     return { success: true, user: resData.user };
   }, []);
 
@@ -164,11 +177,16 @@ export function AuthProvider({ children }) {
       body: JSON.stringify({ institutionName, adminName, adminEmail, adminPassword }),
     });
     if (!ok) return { success: false, error: data.error ?? 'Setup failed.' };
-    return { success: true };
+
+    accessTokenRef.current = data.accessToken;
+    setUser(data.user);
+    setSetupDone(true);
+    return { success: true, user: data.user };
   }, []);
 
   const value = {
     user,
+    setupDone,
     loading,
     login,
     logout,
@@ -188,7 +206,7 @@ export function AuthProvider({ children }) {
     isStudent:    user?.roles?.includes('STUDENT')     ?? false,
   };
 
-  // Show nothing while checking existing session to avoid login flicker
+  // Show loading indicator while checking setup status & restoring session
   if (loading) {
     return (
       <AuthContext.Provider value={value}>
@@ -196,7 +214,7 @@ export function AuthProvider({ children }) {
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>🎓</div>
             <div>CampusFlow ERP</div>
-            <div style={{ fontSize: 12, marginTop: 4, opacity: 0.6 }}>Restoring session…</div>
+            <div style={{ fontSize: 12, marginTop: 4, opacity: 0.6 }}>Initializing authentication…</div>
           </div>
         </div>
       </AuthContext.Provider>

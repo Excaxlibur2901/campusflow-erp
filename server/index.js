@@ -8,7 +8,7 @@ import { initDatabase, pool } from './db.js';
 import { runMigrations } from './migrations.js';
 
 // Route modules
-import authRoutes        from './routes/auth.js';
+import authRoutes, { validateAuthSecrets } from './routes/auth.js';
 import institutionRoutes from './routes/institutions.js';
 import academicRoutes    from './routes/academic.js';
 import departmentRoutes  from './routes/departments.js';
@@ -25,8 +25,10 @@ import auditRoutes       from './routes/audit.js';
 
 const app = express();
 const port = Number(process.env.API_PORT ?? 4000);
-const clientOrigin = process.env.CLIENT_ORIGIN ?? 'http://localhost:5173';
-const IS_PROD = process.env.NODE_ENV === 'production';
+
+/* ── Trust proxy configuration ─────────────────────────────────── */
+// Trust single Nginx reverse proxy hop in Docker deployment
+app.set('trust proxy', 1);
 
 /* ── Security headers ───────────────────────────────────────────── */
 app.use(helmet({
@@ -34,13 +36,26 @@ app.use(helmet({
 }));
 
 /* ── CORS ───────────────────────────────────────────────────────── */
-const allowedOrigins = IS_PROD
-  ? [clientOrigin]
-  : [clientOrigin, 'http://localhost:5173', 'http://localhost:4000'];
+// Parse CLIENT_ORIGIN (supports single string or comma-separated list)
+const envOrigins = (process.env.CLIENT_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const defaultOrigins = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://localhost:4000',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:4000',
+];
+
+const allowedOrigins = [...new Set([...envOrigins, ...defaultOrigins])];
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (curl, server-to-server)
+    // Allow requests with no origin (curl, same-origin, server-to-server)
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error(`CORS: origin ${origin} not allowed`));
   },
@@ -49,7 +64,6 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 /* ── Body parsing & cookies ─────────────────────────────────────── */
 app.use(express.json({ limit: '10mb' }));
@@ -107,6 +121,11 @@ app.use('/api/verify',       documentRoutes);
 app.use((error, _req, res, _next) => {
   console.error('[server error]', error.message ?? error);
 
+  // Map CORS origin rejection to 403 Forbidden
+  if (error.message?.startsWith('CORS: origin')) {
+    return res.status(403).json({ error: error.message });
+  }
+
   // Map known DB constraint errors to friendly messages
   if (error.code === '23505') {
     return res.status(409).json({ error: 'A record with these details already exists.' });
@@ -123,17 +142,24 @@ app.use((error, _req, res, _next) => {
 });
 
 /* ── Startup ────────────────────────────────────────────────────── */
-runMigrations(pool)
-  .then(initDatabase)
-  .then(() => {
-    app.listen(port, '0.0.0.0', () => {
-      console.log(`CampusFlow API v2.0 running on http://localhost:${port}`);
-      console.log(`  Auth:    POST /api/auth/login`);
-      console.log(`  Verify:  GET  /api/verify/document/:id`);
-    });
-  })
-  .catch((error) => {
-    console.error('Unable to initialize PostgreSQL database.');
-    console.error(error.message);
-    process.exit(1);
+validateAuthSecrets();
+
+async function startServer() {
+  try {
+    await runMigrations(pool);
+    await initDatabase();
+    console.log('[PostgreSQL] Database connection and schema migrations verified.');
+  } catch (error) {
+    console.warn('[PostgreSQL] Database initialization warning:', error.message);
+    console.warn('[PostgreSQL] Ensure PostgreSQL container or service is running (npm run db:up).');
+  }
+
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`CampusFlow API v2.0 running on http://localhost:${port}`);
+    console.log(`  Health:  GET  /api/health`);
+    console.log(`  Auth:    POST /api/auth/login`);
+    console.log(`  Verify:  GET  /api/verify/document/:id`);
   });
+}
+
+startServer();
