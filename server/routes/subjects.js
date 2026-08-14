@@ -16,6 +16,8 @@ router.get('/', async (req, res, next) => {
     const conds = [];
     const params = [];
     let idx = 1;
+    conds.push(`d.institution_id = $${idx++}`);
+    params.push(req.user.institution_id);
     if (dept) { conds.push(`d.code = $${idx++}`); params.push(dept); }
     if (search) { conds.push(`(s.name ILIKE $${idx} OR s.code ILIKE $${idx})`); params.push(`%${search}%`); idx++; }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';

@@ -1,12 +1,23 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 
 const DataContext = createContext(null);
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
-export function DataProvider({ children }) {
+export function DataProvider({ children, getAccessToken }) {
   const [toasts, setToasts] = useState([]);
-  const [dataLoading] = useState(false);
-  const [dataError] = useState('');
+  const [dataLoading, setDataLoading] = useState(false);
+  const [dataError, setDataError] = useState('');
 
+  // Data lists required by dashboard and modules
+  const [departments, setDepartments] = useState([]);
+  const [facultyList, setFacultyList] = useState([]);
+  const [studentsList, setStudentsList] = useState([]);
+  const [classroomsList, setClassroomsList] = useState([]);
+  const [subjectsList, setSubjectsList] = useState([]);
+  const [examsList, setExamsList] = useState([]);
+  const [notificationsList, setNotificationsList] = useState([]);
+  const [attendanceHistory, setAttendanceHistory] = useState([]);
+  
   // Settings & Theme UI preferences stored safely in localStorage
   const [settings, setSettingsState] = useState(() => {
     try {
@@ -46,6 +57,51 @@ export function DataProvider({ children }) {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
+  const accessTokenRef = useRef(null);
+
+  useEffect(() => {
+    accessTokenRef.current = getAccessToken?.() ?? null;
+  }, [getAccessToken]);
+
+  useEffect(() => {
+    let active = true;
+    const token = accessTokenRef.current;
+    
+    // Only load data if we have a token (user is authenticated)
+    if (!token) return;
+
+    setDataLoading(true);
+
+    const headers = { Authorization: `Bearer ${token}` };
+
+    Promise.all([
+      fetch(`${API_BASE}/api/departments`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`${API_BASE}/api/faculty`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
+      fetch(`${API_BASE}/api/students`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
+      fetch(`${API_BASE}/api/classrooms`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`${API_BASE}/api/subjects`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`${API_BASE}/api/exams`, { headers }).then(r => r.ok ? r.json() : [])
+    ])
+      .then(([deps, facs, studs, rooms, subs, exms]) => {
+        if (!active) return;
+        setDepartments(deps);
+        setFacultyList(facs);
+        setStudentsList(studs);
+        setClassroomsList(rooms);
+        setSubjectsList(subs);
+        setExamsList(exms);
+        setDataError('');
+      })
+      .catch(error => {
+        if (active) setDataError('Failed to fetch some data lists');
+      })
+      .finally(() => {
+        if (active) setDataLoading(false);
+      });
+
+    return () => { active = false; };
+  }, [getAccessToken]);
+
   const value = {
     dataLoading,
     dataError,
@@ -53,6 +109,16 @@ export function DataProvider({ children }) {
     showToast,
     settings,
     setSettings,
+    departments,
+    facultyList,
+    studentsList,
+    classroomsList,
+    subjectsList,
+    examsList,
+    notificationsList,
+    attendanceHistory,
+    timetableSlots: [],
+    seatAllocations: []
   };
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;

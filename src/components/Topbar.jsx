@@ -25,11 +25,11 @@ const searchableRoutes = Object.entries(routeNames).map(([path, name]) => ({ pat
 
 export default function Topbar({ onToggle }) {
   const { user } = useAuth();
-  const { notificationsList } = useData();
+  const { notificationsList = [] } = useData() || {};
   const location = useLocation();
   const navigate = useNavigate();
   const pageName = routeNames[location.pathname] || 'Page';
-  const unread = notificationsList.filter(n => !n.read).length;
+  const unread = (notificationsList ?? []).filter(n => !n?.read).length;
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const searchRef = useRef(null);

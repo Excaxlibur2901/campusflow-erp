@@ -5,16 +5,17 @@ import { Bell, CheckCheck, Calendar, AlertTriangle, Shield, X } from 'lucide-rea
 const iconMap = { timetable: Calendar, exam: AlertTriangle, attendance: Bell, system: Shield };
 
 export default function NotificationsPage() {
-  const { notificationsList, markAllRead, markRead, deleteNotification } = useData();
+  const { notificationsList = [], markAllRead, markRead, deleteNotification } = useData() || {};
   const [filter, setFilter] = useState('all');
 
   const filtered = useMemo(() => {
-    if (filter === 'unread') return notificationsList.filter(n => !n.read);
-    if (filter !== 'all') return notificationsList.filter(n => n.type === filter);
-    return notificationsList;
+    const list = notificationsList ?? [];
+    if (filter === 'unread') return list.filter(n => !n.read);
+    if (filter !== 'all') return list.filter(n => n.type === filter);
+    return list;
   }, [notificationsList, filter]);
 
-  const unreadCount = notificationsList.filter(n => !n.read).length;
+  const unreadCount = (notificationsList ?? []).filter(n => !n.read).length;
 
   return (
     <div className="fade-in">

@@ -9,6 +9,7 @@
     "server": "node server/index.js",
     "db:up": "docker compose up -d postgres",
     "db:migrate": "node server/migrate.js",
+    "db:reset-setup": "node server/reset-setup-state.js",
     "db:down": "docker compose down",
     "build": "vite build",
     "lint": "eslint .",

@@ -17,20 +17,28 @@ function EmptyChart({ message }) {
 }
 
 export default function AnalyticsPage() {
-  const { departments, facultyList, studentsList, examsList, attendanceHistory, settings, showToast } = useData();
+  const {
+    departments = [],
+    facultyList = [],
+    studentsList = [],
+    examsList = [],
+    attendanceHistory = [],
+    settings = {},
+    showToast,
+  } = useData() || {};
 
   // Real department performance from actual data
-  const deptPerformance = useMemo(() => departments.map(d => {
-    const deptStudents = studentsList.filter(s => s.dept === d.code || s.department === d.name);
-    const deptFaculty = facultyList.filter(f => f.department === d.name);
+  const deptPerformance = useMemo(() => (departments ?? []).map(d => {
+    const deptStudents = (studentsList ?? []).filter(s => s?.dept === d?.code || s?.department === d?.name);
+    const deptFaculty = (facultyList ?? []).filter(f => f?.department === d?.name || f?.dept === d?.code);
     return {
-      name: d.code,
-      fullName: d.name,
+      name: d?.code || 'N/A',
+      fullName: d?.name || 'Department',
       students: deptStudents.length,
       faculty: deptFaculty.length,
       ratio: deptFaculty.length > 0 ? Math.round(deptStudents.length / deptFaculty.length) : 0,
       avgAttendance: deptStudents.length > 0
-        ? Math.round(deptStudents.reduce((a, s) => a + (s.attendance || 0), 0) / deptStudents.length)
+        ? Math.round(deptStudents.reduce((a, s) => a + (s?.attendance || 0), 0) / deptStudents.length)
         : 0,
     };
   }), [departments, studentsList, facultyList]);

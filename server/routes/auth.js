@@ -38,6 +38,15 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 const ACCESS_TTL_S = 15 * 60;        // 15 minutes
 const REFRESH_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
 
+const ROLE_MAP = {
+  SUPER_ADMIN: 'Super Admin',
+  PRINCIPAL: 'Principal',
+  HOD: 'HOD',
+  FACULTY: 'Faculty',
+  EXAM_CELL: 'Exam Cell',
+  STUDENT: 'Student',
+};
+
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: IS_PROD,
@@ -65,9 +74,11 @@ function signRefresh(userId) {
     if (!process.env.AUTH_REFRESH_TOKEN_SECRET?.trim()) {
       throw new Error('AUTH_REFRESH_TOKEN_SECRET is missing');
     }
-    const token = jwt.sign({ sub: userId, type: 'refresh' }, process.env.AUTH_REFRESH_TOKEN_SECRET, {
-      expiresIn: Math.floor(REFRESH_TTL_MS / 1000),
-    });
+    const token = jwt.sign(
+      { sub: userId, type: 'refresh', jti: crypto.randomUUID() },
+      process.env.AUTH_REFRESH_TOKEN_SECRET,
+      { expiresIn: Math.floor(REFRESH_TTL_MS / 1000) },
+    );
     const hash = crypto.createHash('sha256').update(token).digest('hex');
     return { token, hash };
   } catch (err) {
@@ -96,20 +107,31 @@ router.get('/setup-status', async (req, res, next) => {
 ───────────────────────────────────────────────────────────────── */
 router.post('/setup', async (req, res, next) => {
   try {
-    const { institutionName, adminName, adminEmail, adminPassword } = req.body;
+    const {
+      institutionName,
+      adminName,
+      adminEmail,
+      adminPassword,
+      instDetails,
+      departments,
+      classrooms,
+    } = req.body;
 
     if (!institutionName?.trim()) return res.status(400).json({ error: 'Institution name is required.' });
-    if (!adminName?.trim())       return res.status(400).json({ error: 'Admin name is required.' });
+    if (!adminName?.trim())       return res.status(400).json({ error: 'Admin full name is required.' });
     if (!adminEmail?.trim())      return res.status(400).json({ error: 'Admin email is required.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail.trim())) {
+      return res.status(400).json({ error: 'Please enter a valid admin email address.' });
+    }
     if (!adminPassword || adminPassword.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+      return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
     }
 
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Guard: if any SUPER_ADMIN user already exists, deny.
+      // Guard: if any SUPER_ADMIN user already exists, deny setup.
       const existing = await client.query(
         `SELECT 1 FROM users u
          JOIN user_roles ur ON ur.user_id = u.id
@@ -121,17 +143,94 @@ router.post('/setup', async (req, res, next) => {
         return res.status(409).json({ error: 'System is already set up. Use /login.' });
       }
 
-      // Create institution
+      // Check if admin email already belongs to an existing user
+      const existingUser = await client.query(
+        `SELECT 1 FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [adminEmail.trim()],
+      );
+      if (existingUser.rowCount > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Administrator email already exists.' });
+      }
+
+      // 1. Create institution
+      const instData = instDetails || {};
       const instResult = await client.query(
-        `INSERT INTO institutions (name) VALUES ($1) RETURNING id`,
-        [institutionName.trim()],
+        `INSERT INTO institutions (
+          name, affiliation, address, phone, email, website,
+          naac_grade, aishe_code, principal_name, established_year,
+          autonomous_status, college_type, motto, logo_url
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING id`,
+        [
+          institutionName.trim(),
+          instData.affiliation?.trim() || null,
+          instData.address?.trim() || null,
+          instData.phone?.trim() || null,
+          instData.email?.trim() || null,
+          instData.website?.trim() || null,
+          instData.naacGrade?.trim() || null,
+          instData.aisheCode?.trim() || null,
+          instData.principalName?.trim() || adminName.trim(),
+          instData.establishedYear ? Number(instData.establishedYear) || null : null,
+          instData.autonomousStatus?.trim() || null,
+          instData.collegeType?.trim() || null,
+          instData.motto?.trim() || null,
+          instData.collegeLogo || null,
+        ],
       );
       const institutionId = instResult.rows[0].id;
 
-      // Hash password
+      // 2. Insert initial configuration / settings
+      await client.query(
+        `INSERT INTO settings (institution_id, key, value)
+         VALUES ($1, 'institution_profile', $2::jsonb)
+         ON CONFLICT (institution_id, key) DO UPDATE SET value = EXCLUDED.value`,
+        [
+          institutionId,
+          JSON.stringify({
+            institutionName: institutionName.trim(),
+            ...instData,
+            principalName: instData.principalName?.trim() || adminName.trim(),
+          }),
+        ],
+      );
+
+      // 3. Insert Departments if provided
+      if (Array.isArray(departments)) {
+        for (const dept of departments) {
+          if (dept.code?.trim() && dept.name?.trim()) {
+            await client.query(
+              `INSERT INTO departments (institution_id, code, name)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (institution_id, code) DO NOTHING`,
+              [institutionId, dept.code.trim().toUpperCase(), dept.name.trim()],
+            );
+          }
+        }
+      }
+
+      // 4. Insert Classrooms if provided
+      if (Array.isArray(classrooms)) {
+        for (const room of classrooms) {
+          if (room.code?.trim() && room.name?.trim()) {
+            const cap = Number(room.capacity) > 0 ? Number(room.capacity) : 60;
+            const validTypes = ['lecture', 'lab', 'seminar', 'exam_hall', 'other'];
+            const rType = validTypes.includes(room.type) ? room.type : (room.type === 'exam' ? 'exam_hall' : 'lecture');
+            await client.query(
+              `INSERT INTO classrooms (institution_id, code, name, room_type, capacity)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (institution_id, code) DO NOTHING`,
+              [institutionId, room.code.trim().toUpperCase(), room.name.trim(), rType, cap],
+            );
+          }
+        }
+      }
+
+      // 5. Hash password with bcrypt
       const hash = await bcrypt.hash(adminPassword, BCRYPT_COST);
 
-      // Create SUPER_ADMIN user
+      // 6. Create SUPER_ADMIN user
       const nameParts = adminName.trim().split(/\s+/);
       const initials = nameParts.length >= 2
         ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
@@ -145,7 +244,7 @@ router.post('/setup', async (req, res, next) => {
       );
       const userId = userResult.rows[0].id;
 
-      // Assign SUPER_ADMIN role
+      // 7. Assign SUPER_ADMIN role
       await client.query(
         `INSERT INTO user_roles (user_id, role_id)
          SELECT $1, id FROM roles WHERE code = 'SUPER_ADMIN'`,
@@ -177,6 +276,9 @@ router.post('/setup', async (req, res, next) => {
 
       res.cookie(COOKIE_NAME, refreshToken, REFRESH_COOKIE_OPTIONS);
 
+      const roleCode = roles[0] || 'SUPER_ADMIN';
+      const role = ROLE_MAP[roleCode] || roleCode;
+
       return res.status(201).json({
         ok: true,
         accessToken,
@@ -185,8 +287,10 @@ router.post('/setup', async (req, res, next) => {
           id: userId,
           email: adminEmail.trim().toLowerCase(),
           fullName: adminName.trim(),
+          name: adminName.trim(),
           initials,
           roles,
+          role,
         },
       });
     } catch (err) {
@@ -300,6 +404,9 @@ router.post('/login', async (req, res, next) => {
 
     res.cookie(COOKIE_NAME, refreshToken, REFRESH_COOKIE_OPTIONS);
 
+    const roleCode = roles[0] || 'SUPER_ADMIN';
+    const role = ROLE_MAP[roleCode] || roleCode;
+
     return res.json({
       accessToken,
       expiresIn: ACCESS_TTL_S,
@@ -307,8 +414,10 @@ router.post('/login', async (req, res, next) => {
         id: user.id,
         email: user.email,
         fullName: user.full_name,
+        name: user.full_name,
         initials: user.initials,
         roles,
+        role,
       },
     });
   } catch (err) {
@@ -400,10 +509,22 @@ router.post('/refresh', async (req, res, next) => {
     );
 
     res.cookie(COOKIE_NAME, newRefresh, REFRESH_COOKIE_OPTIONS);
+
+    const refRoleCode = roles[0] || 'SUPER_ADMIN';
+    const refRole = ROLE_MAP[refRoleCode] || refRoleCode;
+
     return res.json({
       accessToken: newAccess,
       expiresIn: ACCESS_TTL_S,
-      user: { id: user.id, email: user.email, fullName: user.full_name, initials: user.initials, roles },
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.full_name,
+        name: user.full_name,
+        initials: user.initials,
+        roles,
+        role: refRole,
+      },
     });
   } catch (err) {
     next(err);

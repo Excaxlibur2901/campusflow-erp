@@ -4,9 +4,9 @@ import CollegeHeader from '../components/CollegeHeader';
 import { Save, Upload, Database, AlertTriangle, Image } from 'lucide-react';
 
 export default function SettingsPage() {
-  const { settings, setSettings, showToast } = useData();
+  const { settings = {}, setSettings, showToast } = useData() || {};
   const [activeTab, setActiveTab] = useState('institution');
-  const [form, setForm] = useState({ ...settings });
+  const [form, setForm] = useState({ ...(settings || {}) });
   const [backups, setBackups] = useState([]);
   const logoInputRef = useRef(null);
 

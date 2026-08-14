@@ -22,6 +22,7 @@ import AuditLogsPage from './pages/AuditLogsPage';
 import SettingsPage from './pages/SettingsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import VerificationPage from './pages/VerificationPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import { CheckCircle, AlertTriangle, Info } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 
@@ -43,7 +44,7 @@ function ToastContainer() {
 }
 
 function AppLayout() {
-  const { user, setupDone } = useAuth();
+  const { user, setupDone, loading: authLoading } = useAuth();
   const { dataLoading, dataError } = useData();
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
@@ -60,7 +61,7 @@ function AppLayout() {
     );
   }
 
-  if (dataLoading) {
+  if (authLoading || dataLoading) {
     return (
       <div className="page-content" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
         <div className="card" style={{ width: 320, textAlign: 'center' }}>
@@ -123,7 +124,9 @@ function AppWithAuth() {
   return (
     <DataProvider getAccessToken={getAccessToken}>
       <BrowserRouter>
-        <AppLayout />
+        <ErrorBoundary>
+          <AppLayout />
+        </ErrorBoundary>
       </BrowserRouter>
     </DataProvider>
   );

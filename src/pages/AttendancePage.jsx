@@ -5,7 +5,15 @@ import { UserCheck, Download, AlertTriangle, Users } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function AttendancePage() {
-  const { studentsList, subjectsList, departments, submitAttendance, attendanceHistory, settings, showToast } = useData();
+  const {
+    studentsList = [],
+    subjectsList = [],
+    departments = [],
+    submitAttendance,
+    attendanceHistory = [],
+    settings = {},
+    showToast,
+  } = useData() || {};
   const [activeTab, setActiveTab] = useState('mark');
   const [selectedDept, setSelectedDept] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('');
@@ -21,12 +29,12 @@ export default function AttendancePage() {
   }, [departments, selectedDept]);
 
   useEffect(() => {
-    const deptSubs = subjectsList.filter(s => s.dept === selectedDept);
+    const deptSubs = (subjectsList ?? []).filter(s => s.dept === selectedDept);
     if (deptSubs.length > 0 && !deptSubs.find(s => s.code === selectedSubject)) setSelectedSubject(deptSubs[0].code);
   }, [selectedDept, selectedSubject, subjectsList]);
 
   const sectionStudents = useMemo(() =>
-    studentsList.filter(s => s.section === selectedSection && s.dept === selectedDept),
+    (studentsList ?? []).filter(s => s.section === selectedSection && s.dept === selectedDept),
   [studentsList, selectedSection, selectedDept]);
 
   // Reset records when section/dept changes
@@ -40,14 +48,14 @@ export default function AttendancePage() {
     setRecords(prev => prev.map(r => r.id === id ? { ...r, status: r.status === 'present' ? 'absent' : 'present' } : r));
   };
 
-  const presentCount = records.filter(r => r.status === 'present').length;
-  const defaulters = studentsList.filter(s => s.attendance < 75);
-  const deptSubjects = subjectsList.filter(s => s.dept === selectedDept);
+  const presentCount = (records ?? []).filter(r => r.status === 'present').length;
+  const defaulters = (studentsList ?? []).filter(s => s.attendance < 75);
+  const deptSubjects = (subjectsList ?? []).filter(s => s.dept === selectedDept);
 
   // Real subject-wise attendance from history
   const subjectAtt = useMemo(() =>
     deptSubjects.filter(s => s.type === 'theory' || s.type === 'Theory').map(s => {
-      const subRecords = attendanceHistory.filter(h => h.subject === s.code || h.subject === s.name);
+      const subRecords = (attendanceHistory ?? []).filter(h => h.subject === s.code || h.subject === s.name);
       const totalStudents = subRecords.reduce((a, r) => a + (r.total || 0), 0);
       const totalPresent = subRecords.reduce((a, r) => a + (r.present || 0), 0);
       const pct = totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : null;

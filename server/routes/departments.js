@@ -24,8 +24,10 @@ router.get('/', async (req, res, next) => {
        FROM departments d
        LEFT JOIN faculty f ON f.department_id = d.id AND f.active = true
        LEFT JOIN students s ON s.department_id = d.id AND s.status = 'ACTIVE'
+       WHERE d.institution_id = $1
        GROUP BY d.id
        ORDER BY d.name`,
+      [req.user.institution_id]
     );
     return res.json(result.rows);
   } catch (err) { next(err); }
@@ -33,7 +35,8 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL'), async (req, res, next) => {
   try {
-    const { code, name, institutionId } = req.body;
+  try {
+    const { code, name } = req.body;
     if (!code?.trim()) return res.status(400).json({ error: 'Department code is required.' });
     if (!name?.trim()) return res.status(400).json({ error: 'Department name is required.' });
 
@@ -41,7 +44,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL'), async (req, res, next)
       `INSERT INTO departments (institution_id, code, name, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $4)
        RETURNING *`,
-      [institutionId ?? null, code.trim().toUpperCase(), name.trim(), req.user.id],
+      [req.user.institution_id, code.trim().toUpperCase(), name.trim(), req.user.id],
     );
     await auditLog({ userId: req.user.id, action: 'CREATE', module: 'Departments', entity: name.trim(), entityId: result.rows[0].id });
     return res.status(201).json(result.rows[0]);
@@ -54,7 +57,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL'), async (req, res, next)
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
     const { code, name, active } = req.body;
-    const before = await pool.query('SELECT * FROM departments WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM departments WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Department not found.' });
 
     const result = await pool.query(
@@ -63,9 +66,9 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
          name = COALESCE($2, name),
          active = COALESCE($3, active),
          updated_by = $4
-       WHERE id = $5
+       WHERE id = $5 AND institution_id = $6
        RETURNING *`,
-      [code?.trim()?.toUpperCase() ?? null, name?.trim() ?? null, active ?? null, req.user.id, req.params.id],
+      [code?.trim()?.toUpperCase() ?? null, name?.trim() ?? null, active ?? null, req.user.id, req.params.id, req.user.institution_id],
     );
     await auditLog({
       userId: req.user.id, action: 'UPDATE', module: 'Departments',
@@ -81,10 +84,10 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
 
 router.delete('/:id', requireRole('SUPER_ADMIN'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM departments WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM departments WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Department not found.' });
 
-    await pool.query('DELETE FROM departments WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM departments WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     await auditLog({ userId: req.user.id, action: 'DELETE', module: 'Departments', entity: before.rows[0].name, entityId: req.params.id, before: before.rows[0] });
     return res.json({ ok: true });
   } catch (err) { next(err); }

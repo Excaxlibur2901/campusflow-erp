@@ -19,6 +19,8 @@ router.get('/', async (req, res, next) => {
     const params = [];
     const conds = [];
     let idx = 1;
+    conds.push(`f.institution_id = $${idx++}`);
+    params.push(req.user.institution_id);
     if (dept) { conds.push(`d.code = $${idx++}`); params.push(dept); }
     if (search) { conds.push(`f.full_name ILIKE $${idx++}`); params.push(`%${search}%`); }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
@@ -41,13 +43,14 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const { employeeCode, fullName, email, phone, departmentId, specialization, maxWeeklyHours, institutionId } = req.body;
+  try {
+    const { employeeCode, fullName, email, phone, departmentId, specialization, maxWeeklyHours } = req.body;
     if (!employeeCode?.trim()) return res.status(400).json({ error: 'Employee code is required.' });
     if (!fullName?.trim())     return res.status(400).json({ error: 'Full name is required.' });
     const result = await pool.query(
       `INSERT INTO faculty (institution_id, department_id, employee_code, full_name, email, phone, specialization, max_weekly_hours, created_by, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
-      [institutionId ?? null, departmentId ?? null, employeeCode.trim(), fullName.trim(),
+      [req.user.institution_id, departmentId ?? null, employeeCode.trim(), fullName.trim(),
        email?.trim() ?? null, phone?.trim() ?? null, specialization?.trim() ?? null,
        maxWeeklyHours ?? 22, req.user.id],
     );
@@ -71,10 +74,10 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
          specialization = COALESCE($5, specialization),
          max_weekly_hours = COALESCE($6, max_weekly_hours),
          active = COALESCE($7, active), updated_by = $8
-       WHERE id = $9 RETURNING *`,
+       WHERE id = $9 AND institution_id = $10 RETURNING *`,
       [fullName?.trim()??null, email?.trim()??null, phone?.trim()??null,
        departmentId??null, specialization?.trim()??null, maxWeeklyHours??null,
-       active??null, req.user.id, req.params.id],
+       active??null, req.user.id, req.params.id, req.user.institution_id],
     );
     await auditLog({ userId: req.user.id, action: 'UPDATE', module: 'Faculty', entity: result.rows[0].full_name, entityId: req.params.id, before: before.rows[0], after: result.rows[0] });
     return res.json(result.rows[0]);
@@ -83,9 +86,9 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
 
 router.delete('/:id', requireRole('SUPER_ADMIN', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM faculty WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM faculty WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Faculty not found.' });
-    await pool.query('DELETE FROM faculty WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM faculty WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     await auditLog({ userId: req.user.id, action: 'DELETE', module: 'Faculty', entity: before.rows[0].full_name, entityId: req.params.id, before: before.rows[0] });
     return res.json({ ok: true });
   } catch (err) { next(err); }

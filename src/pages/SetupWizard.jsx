@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import CollegeHeader from '../components/CollegeHeader';
-import { ChevronRight, ChevronLeft, Check, Plus, Trash2, Image, Eye } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Check, Plus, Trash2, Image, Eye, ShieldCheck } from 'lucide-react';
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome' },
@@ -10,7 +10,7 @@ const STEPS = [
   { id: 'details', title: 'Details' },
   { id: 'departments', title: 'Departments' },
   { id: 'classrooms', title: 'Classrooms' },
-  { id: 'preview', title: 'Preview' },
+  { id: 'preview', title: 'Preview & Admin' },
 ];
 
 export default function SetupWizard() {
@@ -23,7 +23,10 @@ export default function SetupWizard() {
   // Super Admin Account Data
   const [adminName, setAdminName] = useState('System Administrator');
   const [adminEmail, setAdminEmail] = useState('');
+  const [adminPhone, setAdminPhone] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
 
   // All institution data
   const [inst, setInst] = useState({
@@ -57,35 +60,54 @@ export default function SetupWizard() {
 
   const canProceed = () => {
     if (step === 1) {
-      return (
-        inst.institutionName.trim().length > 0 &&
-        adminName.trim().length > 0 &&
-        adminEmail.trim().length > 0 &&
-        adminPassword.length >= 8
-      );
+      return inst.institutionName.trim().length > 0;
     }
     if (step === 3) return depts.some(d => d.code.trim() && d.name.trim());
     return true;
   };
 
   const handleFinish = async () => {
+    const errors = {};
     if (!inst.institutionName.trim()) {
       showToast('Institution name is required.', 'error');
+      setStep(1);
       return;
     }
-    if (!adminEmail.trim() || !adminPassword || adminPassword.length < 8) {
-      showToast('Super Admin email and password (min 8 chars) are required.', 'error');
+    if (!adminName.trim()) {
+      errors.name = 'Full name is required.';
+    }
+    if (!adminEmail.trim()) {
+      errors.email = 'Institutional email is required.';
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail.trim())) {
+      errors.email = 'Please enter a valid email address.';
+    }
+    if (!adminPassword) {
+      errors.password = 'Password is required.';
+    } else if (adminPassword.length < 8) {
+      errors.password = 'Password must be at least 8 characters long.';
+    }
+    if (adminConfirmPassword !== adminPassword) {
+      errors.confirmPassword = 'Passwords do not match.';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      showToast('Please fix the validation errors before launching.', 'error');
       return;
     }
 
+    setFieldErrors({});
     setLoading(true);
 
     try {
       const result = await runSetup({
         institutionName: inst.institutionName.trim(),
-        adminName: adminName.trim() || 'System Administrator',
+        adminName: adminName.trim(),
         adminEmail: adminEmail.trim(),
         adminPassword,
+        instDetails: { ...inst, phone: inst.phone || adminPhone },
+        departments: depts.filter(d => d.code.trim() && d.name.trim()),
+        classrooms: rooms.filter(r => r.code.trim() && r.name.trim()),
       });
 
       if (!result.success) {
@@ -126,7 +148,7 @@ export default function SetupWizard() {
             <div className="setup-welcome">
               <div className="setup-logo">CF</div>
               <h1>Welcome to CampusFlow ERP</h1>
-              <p>Let's set up your institution in just a few steps. You'll configure your college header, departments, and classrooms to get started.</p>
+              <p>Let's set up your institution in just a few steps. You'll configure your college header, departments, classrooms, and first administrator account to get started.</p>
               <div className="setup-features">
                 {['College Header with Logo & Branding', 'Smart Timetable Scheduling', 'Exam Seating with Anti-Cheat', 'Attendance Tracking & Document Generation'].map((f, i) => (
                   <div key={i} className="setup-feature-item">
@@ -169,25 +191,6 @@ export default function SetupWizard() {
                   <div className="form-group">
                     <label className="form-label">Institution Name *</label>
                     <input className="form-input" placeholder="e.g., Vishwakarma Institute of Technology" value={inst.institutionName} onChange={e => setInst({ ...inst, institutionName: e.target.value })} />
-                  </div>
-
-                  {/* Super Admin Account Details */}
-                  <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-main)', border: '1px solid var(--border)', marginBottom: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: 'var(--primary)' }}>🔑 Initial Super Admin Account</div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
-                      <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label">Admin Name *</label>
-                        <input className="form-input" placeholder="e.g. Dr. System Administrator" value={adminName} onChange={e => setAdminName(e.target.value)} />
-                      </div>
-                      <div className="form-group" style={{ marginBottom: 0 }}>
-                        <label className="form-label">Admin Email *</label>
-                        <input className="form-input" type="email" placeholder="admin@college.edu" value={adminEmail} onChange={e => setAdminEmail(e.target.value)} />
-                      </div>
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Admin Password (min 8 chars) *</label>
-                      <input className="form-input" type="password" placeholder="Enter secure password" value={adminPassword} onChange={e => setAdminPassword(e.target.value)} />
-                    </div>
                   </div>
 
                   <div className="form-group">
@@ -330,22 +333,91 @@ export default function SetupWizard() {
             </div>
           )}
 
-          {/* STEP 5: Final Preview */}
+          {/* STEP 5: Final Preview & First Admin Account */}
           {step === 5 && (
-            <div className="setup-welcome">
-              <div style={{ width: 80, height: 80, borderRadius: '50%', background: 'linear-gradient(135deg, var(--success), #4ade80)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px' }}>
-                <Check size={40} color="#fff" />
-              </div>
-              <h1>You're All Set!</h1>
-              <p style={{ marginBottom: 24 }}>Here's how your official college header will look on documents:</p>
+            <div>
+              <h2>Preview & Create Administrator</h2>
+              <p className="setup-subtitle">Review your college header and create your first Super Admin account</p>
 
-              <div className="header-preview-card" style={{ maxWidth: 700, margin: '0 auto 20px', textAlign: 'left' }}>
+              {/* College Header Preview */}
+              <div className="header-preview-card" style={{ maxWidth: 780, margin: '0 auto 24px', textAlign: 'left' }}>
                 <CollegeHeader variant="document" customSettings={inst} />
               </div>
 
-              <p style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+              {/* First Super Admin Account Credentials Form */}
+              <div style={{ padding: 20, borderRadius: 10, background: 'var(--bg-main)', border: '1px solid var(--border)', maxWidth: 780, margin: '0 auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700, marginBottom: 4, color: 'var(--primary)' }}>
+                  <ShieldCheck size={18} />
+                  <span>First Administrator Account (SUPER_ADMIN)</span>
+                </div>
+                <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+                  Create the primary administrator account for {inst.institutionName || 'your institution'}. This account will have full access.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Admin Full Name *</label>
+                    <input
+                      className="form-input"
+                      placeholder="e.g. Dr. System Administrator"
+                      value={adminName}
+                      onChange={e => { setAdminName(e.target.value); if (fieldErrors.name) setFieldErrors(prev => ({ ...prev, name: null })); }}
+                    />
+                    {fieldErrors.name && <span style={{ color: 'var(--error, #ef4444)', fontSize: 12, marginTop: 4, display: 'block' }}>{fieldErrors.name}</span>}
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Institutional Email *</label>
+                    <input
+                      className="form-input"
+                      type="email"
+                      placeholder="admin@college.edu"
+                      value={adminEmail}
+                      onChange={e => { setAdminEmail(e.target.value); if (fieldErrors.email) setFieldErrors(prev => ({ ...prev, email: null })); }}
+                    />
+                    {fieldErrors.email && <span style={{ color: 'var(--error, #ef4444)', fontSize: 12, marginTop: 4, display: 'block' }}>{fieldErrors.email}</span>}
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Phone Number (Optional)</label>
+                    <input
+                      className="form-input"
+                      placeholder="+91 9876543210"
+                      value={adminPhone}
+                      onChange={e => setAdminPhone(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Password (min 8 chars) *</label>
+                    <input
+                      className="form-input"
+                      type="password"
+                      placeholder="Enter secure password"
+                      value={adminPassword}
+                      onChange={e => { setAdminPassword(e.target.value); if (fieldErrors.password) setFieldErrors(prev => ({ ...prev, password: null })); }}
+                    />
+                    {fieldErrors.password && <span style={{ color: 'var(--error, #ef4444)', fontSize: 12, marginTop: 4, display: 'block' }}>{fieldErrors.password}</span>}
+                  </div>
+
+                  <div className="form-group" style={{ marginBottom: 0 }}>
+                    <label className="form-label">Confirm Password *</label>
+                    <input
+                      className="form-input"
+                      type="password"
+                      placeholder="Re-enter password"
+                      value={adminConfirmPassword}
+                      onChange={e => { setAdminConfirmPassword(e.target.value); if (fieldErrors.confirmPassword) setFieldErrors(prev => ({ ...prev, confirmPassword: null })); }}
+                    />
+                    {fieldErrors.confirmPassword && <span style={{ color: 'var(--error, #ef4444)', fontSize: 12, marginTop: 4, display: 'block' }}>{fieldErrors.confirmPassword}</span>}
+                  </div>
+                </div>
+              </div>
+
+              <p style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', marginTop: 16 }}>
                 Configured <strong>{depts.filter(d => d.code && d.name).length}</strong> departments and <strong>{rooms.filter(r => r.code && r.name).length}</strong> classrooms.
-                Add faculty, students, and subjects from the management pages.
               </p>
             </div>
           )}
@@ -354,7 +426,7 @@ export default function SetupWizard() {
         {/* Navigation */}
         <div className="setup-nav">
           {step > 0 ? (
-            <button className="btn btn-outline" onClick={() => setStep(s => s - 1)}><ChevronLeft size={16} /> Back</button>
+            <button className="btn btn-outline" onClick={() => setStep(s => s - 1)} disabled={loading}><ChevronLeft size={16} /> Back</button>
           ) : <div />}
           {step < STEPS.length - 1 ? (
             <button className="btn btn-primary" onClick={() => setStep(s => s + 1)} disabled={!canProceed()}>

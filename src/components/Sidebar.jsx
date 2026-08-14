@@ -110,9 +110,25 @@ const menuByRole = {
 
 export default function Sidebar({ collapsed }) {
   const { user, logout } = useAuth();
-  const { settings } = useData();
+  const { settings = {} } = useData() || {};
   const location = useLocation();
-  const menu = menuByRole[user?.role] || menuByRole['Student'];
+
+  const roleCode = Array.isArray(user?.roles) && user.roles[0] ? user.roles[0] : (user?.role || '');
+  const roleNameMap = {
+    SUPER_ADMIN: 'Super Admin',
+    'Super Admin': 'Super Admin',
+    PRINCIPAL: 'Principal',
+    Principal: 'Principal',
+    HOD: 'HOD',
+    FACULTY: 'Faculty',
+    Faculty: 'Faculty',
+    EXAM_CELL: 'Exam Cell',
+    'Exam Cell': 'Exam Cell',
+    STUDENT: 'Student',
+    Student: 'Student',
+  };
+  const resolvedRole = roleNameMap[roleCode] || 'Super Admin';
+  const menu = menuByRole[resolvedRole] || menuByRole['Super Admin'] || menuByRole['Student'];
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>

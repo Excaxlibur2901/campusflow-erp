@@ -21,6 +21,8 @@ router.get('/', async (req, res, next) => {
     const conds = [];
     const params = [];
     let idx = 1;
+    conds.push(`e.institution_id = $${idx++}`);
+    params.push(req.user.institution_id);
     if (status) { conds.push(`e.status = $${idx++}`); params.push(status); }
     if (search) { conds.push(`e.name ILIKE $${idx++}`); params.push(`%${search}%`); }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
@@ -54,9 +56,9 @@ router.get('/:id', async (req, res, next) => {
        LEFT JOIN exam_subjects es ON es.exam_id = e.id
        LEFT JOIN exam_registrations er ON er.exam_subject_id = es.id
        LEFT JOIN exam_halls eh ON eh.exam_id = e.id
-       WHERE e.id = $1
+       WHERE e.id = $1 AND e.institution_id = $2
        GROUP BY e.id`,
-      [req.params.id],
+      [req.params.id, req.user.institution_id],
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Exam not found.' });
     return res.json(result.rows[0]);
@@ -72,7 +74,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'EXAM_CELL'), async (re
     const result = await pool.query(
       `INSERT INTO exams (institution_id, academic_year_id, name, exam_type, starts_on, ends_on, created_by, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,
-      [institutionId ?? null, academicYearId ?? null, name.trim(), examType, startsOn ?? null, endsOn ?? null, req.user.id],
+      [req.user.institution_id, academicYearId ?? null, name.trim(), examType, startsOn ?? null, endsOn ?? null, req.user.id],
     );
     await auditLog({ userId: req.user.id, action: 'CREATE', module: 'Exams', entity: name.trim(), entityId: result.rows[0].id });
     return res.status(201).json(result.rows[0]);
@@ -81,7 +83,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'EXAM_CELL'), async (re
 
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'EXAM_CELL'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM exams WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM exams WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Exam not found.' });
     const { name, examType, startsOn, endsOn, status } = req.body;
 
@@ -90,8 +92,8 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'EXAM_CELL'), async (
          name = COALESCE($1, name), exam_type = COALESCE($2, exam_type),
          starts_on = COALESCE($3, starts_on), ends_on = COALESCE($4, ends_on),
          status = COALESCE($5, status), updated_by = $6
-       WHERE id = $7 RETURNING *`,
-      [name?.trim() ?? null, examType ?? null, startsOn ?? null, endsOn ?? null, status ?? null, req.user.id, req.params.id],
+       WHERE id = $7 AND institution_id = $8 RETURNING *`,
+      [name?.trim() ?? null, examType ?? null, startsOn ?? null, endsOn ?? null, status ?? null, req.user.id, req.params.id, req.user.institution_id],
     );
     await auditLog({ userId: req.user.id, action: 'UPDATE', module: 'Exams', entity: result.rows[0].name, entityId: req.params.id, before: before.rows[0], after: result.rows[0] });
     return res.json(result.rows[0]);
@@ -100,9 +102,9 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'EXAM_CELL'), async (
 
 router.delete('/:id', requireRole('SUPER_ADMIN', 'EXAM_CELL'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM exams WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM exams WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Exam not found.' });
-    await pool.query('DELETE FROM exams WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM exams WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     await auditLog({ userId: req.user.id, action: 'DELETE', module: 'Exams', entity: before.rows[0].name, entityId: req.params.id, before: before.rows[0] });
     return res.json({ ok: true });
   } catch (err) { next(err); }

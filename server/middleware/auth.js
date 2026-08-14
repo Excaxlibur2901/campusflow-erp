@@ -42,7 +42,7 @@ export async function authenticateUser(req, res, next) {
 
     // Lightweight liveness check — confirm the user is still ACTIVE in the DB.
     const result = await pool.query(
-      `SELECT u.id, u.email, u.full_name, u.status,
+      `SELECT u.id, u.institution_id, u.email, u.full_name, u.status,
               array_agg(r.code) FILTER (WHERE r.code IS NOT NULL) AS roles
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
@@ -63,6 +63,7 @@ export async function authenticateUser(req, res, next) {
 
     req.user = {
       id: user.id,
+      institution_id: user.institution_id,
       email: user.email,
       fullName: user.full_name,
       roles: user.roles ?? [],
@@ -141,7 +142,7 @@ export async function optionalAuth(req, res, next) {
   try {
     const payload = jwt.verify(token, ACCESS_SECRET);
     const result = await pool.query(
-      `SELECT u.id, u.email, u.full_name, u.status,
+      `SELECT u.id, u.institution_id, u.email, u.full_name, u.status,
               array_agg(r.code) FILTER (WHERE r.code IS NOT NULL) AS roles
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
@@ -153,6 +154,7 @@ export async function optionalAuth(req, res, next) {
     if (result.rowCount > 0 && result.rows[0].status === 'ACTIVE') {
       req.user = {
         id: result.rows[0].id,
+        institution_id: result.rows[0].institution_id,
         email: result.rows[0].email,
         fullName: result.rows[0].full_name,
         roles: result.rows[0].roles ?? [],

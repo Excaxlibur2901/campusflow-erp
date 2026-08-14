@@ -28,6 +28,9 @@ router.get('/', async (req, res, next) => {
     const params = [];
     let idx = 1;
 
+    conditions.push(`s.institution_id = $${idx++}`);
+    params.push(req.user.institution_id);
+
     if (dept) { conditions.push(`d.code = $${idx++}`); params.push(dept); }
     if (section) { conditions.push(`sec.code = $${idx++}`); params.push(section); }
     if (status) { conditions.push(`s.status = $${idx++}`); params.push(status.toUpperCase()); }
@@ -74,7 +77,7 @@ router.get('/', async (req, res, next) => {
 /* ── POST /api/students ─────────────────────────────────────────── */
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId, institutionId } = req.body;
+    const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId } = req.body;
 
     if (!rollNumber?.trim()) return res.status(400).json({ error: 'Roll number is required.' });
     if (!fullName?.trim())   return res.status(400).json({ error: 'Full name is required.' });
@@ -84,7 +87,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res
          (institution_id, department_id, section_id, roll_number, enrollment_number, full_name, email, phone, created_by, updated_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
        RETURNING *`,
-      [institutionId ?? null, departmentId ?? null, sectionId ?? null,
+      [req.user.institution_id, departmentId ?? null, sectionId ?? null,
        rollNumber.trim(), enrollmentNumber?.trim() ?? null,
        fullName.trim(), email?.trim() ?? null, phone?.trim() ?? null,
        req.user.id],
@@ -100,7 +103,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res
 /* ── PUT /api/students/:id ──────────────────────────────────────── */
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM students WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM students WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Student not found.' });
 
     const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId, status } = req.body;
@@ -115,12 +118,12 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
          section_id         = COALESCE($7, section_id),
          status             = COALESCE($8, status),
          updated_by         = $9
-       WHERE id = $10
+       WHERE id = $10 AND institution_id = $11
        RETURNING *`,
       [rollNumber?.trim() ?? null, enrollmentNumber?.trim() ?? null,
        fullName?.trim() ?? null, email?.trim() ?? null, phone?.trim() ?? null,
        departmentId ?? null, sectionId ?? null, status ?? null,
-       req.user.id, req.params.id],
+       req.user.id, req.params.id, req.user.institution_id],
     );
     await auditLog({
       userId: req.user.id, action: 'UPDATE', module: 'Students',
@@ -134,10 +137,10 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
 /* ── DELETE /api/students/:id ───────────────────────────────────── */
 router.delete('/:id', requireRole('SUPER_ADMIN', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM students WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM students WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Student not found.' });
 
-    await pool.query('DELETE FROM students WHERE id = $1', [req.params.id]);
+    await pool.query('DELETE FROM students WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     await auditLog({ userId: req.user.id, action: 'DELETE', module: 'Students', entity: before.rows[0].full_name, entityId: req.params.id, before: before.rows[0] });
     return res.json({ ok: true });
   } catch (err) { next(err); }

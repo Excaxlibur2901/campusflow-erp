@@ -113,16 +113,16 @@ export default function DocumentsPage() {
   }, [loadData]);
 
   // Filtered documents
-  const filtered = useMemo(() => documents.filter((d) => {
-    const ms = d.title.toLowerCase().includes(search.toLowerCase());
+  const filtered = useMemo(() => (documents ?? []).filter((d) => {
+    const ms = (d.title || '').toLowerCase().includes(search.toLowerCase());
     const mt = typeFilter === 'All' || d.type === typeFilter;
     return ms && mt;
   }), [documents, search, typeFilter]);
 
-  const allTypes = useMemo(() => [...new Set(documents.map((d) => d.type))], [documents]);
+  const allTypes = useMemo(() => [...new Set((documents ?? []).map((d) => d.type))], [documents]);
 
-  const getStudent = (id) => studentsList.find((s) => s.id === id);
-  const getExam = (id) => examsList.find((e) => e.id === id);
+  const getStudent = (id) => (studentsList ?? []).find((s) => s.id === id);
+  const getExam = (id) => (examsList ?? []).find((e) => e.id === id);
   const studentLabel = (s) => `${s.name} — ${s.rollNo} (${s.dept})`;
   const examLabel = (e) => `${e.name} — ${e.date || 'Scheduled'}`;
 
