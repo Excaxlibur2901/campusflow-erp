@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { DataProvider, useData } from './context/DataContext';
 import Sidebar from './components/Sidebar';
@@ -24,7 +24,6 @@ import AnalyticsPage from './pages/AnalyticsPage';
 import VerificationPage from './pages/VerificationPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { CheckCircle, AlertTriangle, Info } from 'lucide-react';
-import { useLocation } from 'react-router-dom';
 
 function ToastContainer() {
   const { toasts } = useData();
@@ -61,7 +60,7 @@ function AppLayout() {
     );
   }
 
-  if (authLoading || dataLoading) {
+  if (authLoading || (user && dataLoading)) {
     return (
       <div className="page-content" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
         <div className="card" style={{ width: 320, textAlign: 'center' }}>
@@ -73,12 +72,18 @@ function AppLayout() {
     );
   }
 
-  // First time: show setup wizard
-  if (!setupDone) return <SetupWizard />;
+  // Unauthenticated routing: allows visiting both /setup (Setup Wizard) and /login (Login Page)
+  if (!user) {
+    return (
+      <Routes>
+        <Route path="/setup" element={<SetupWizard />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="*" element={<Navigate to={setupDone ? "/login" : "/setup"} replace />} />
+      </Routes>
+    );
+  }
 
-  // Not logged in: show login
-  if (!user) return <LoginPage />;
-
+  // Authenticated application layout
   return (
     <div className="app-layout">
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
@@ -101,7 +106,7 @@ function AppLayout() {
             <Route path="/audit" element={<AuditLogsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/analytics" element={<AnalyticsPage />} />
-            <Route path="*" element={<Navigate to="/" />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

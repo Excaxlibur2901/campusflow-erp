@@ -1,8 +1,9 @@
 import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import CollegeHeader from '../components/CollegeHeader';
-import { ChevronRight, ChevronLeft, Check, Plus, Trash2, Image, Eye, ShieldCheck } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Check, Plus, Trash2, Image, Eye, ShieldCheck, LogIn, AlertTriangle } from 'lucide-react';
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome' },
@@ -14,10 +15,12 @@ const STEPS = [
 ];
 
 export default function SetupWizard() {
+  const navigate = useNavigate();
   const { runSetup } = useAuth();
   const { setSettings, showToast } = useData();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [setupErrorMsg, setSetupErrorMsg] = useState('');
   const fileInputRef = useRef(null);
 
   // Super Admin Account Data
@@ -67,6 +70,7 @@ export default function SetupWizard() {
   };
 
   const handleFinish = async () => {
+    setSetupErrorMsg('');
     const errors = {};
     if (!inst.institutionName.trim()) {
       showToast('Institution name is required.', 'error');
@@ -111,7 +115,12 @@ export default function SetupWizard() {
       });
 
       if (!result.success) {
-        showToast(result.error || 'Setup failed.', 'error');
+        const isConflict = result.error?.toLowerCase().includes('already') || result.error?.includes('409');
+        const msg = isConflict
+          ? 'This college is already registered. Please sign in instead.'
+          : (result.error || 'Setup failed.');
+        setSetupErrorMsg(msg);
+        showToast(msg, 'error');
         setLoading(false);
         return;
       }
@@ -119,6 +128,7 @@ export default function SetupWizard() {
       setSettings(prev => ({ ...prev, ...inst, principalName: inst.principalName || adminName }));
       showToast('Setup complete! Welcome to CampusFlow ERP.');
     } catch {
+      setSetupErrorMsg('Network error completing setup.');
       showToast('Network error completing setup.', 'error');
     } finally {
       setLoading(false);
@@ -128,6 +138,53 @@ export default function SetupWizard() {
   return (
     <div className="setup-wizard">
       <div className="setup-container" style={{ maxWidth: step === 5 ? 900 : 820 }}>
+        {/* Top Header Bar with direct Login link */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          paddingBottom: 16, marginBottom: 20, borderBottom: '1px solid var(--border)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div className="setup-logo" style={{ width: 34, height: 34, fontSize: 14 }}>CF</div>
+            <span style={{ fontWeight: 800, fontSize: 16, color: 'var(--primary)' }}>CampusFlow College Onboarding</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-outline btn-sm"
+            onClick={() => navigate('/login')}
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+          >
+            <LogIn size={14} /> Already have an account? Sign In
+          </button>
+        </div>
+
+        {/* 409 Conflict / Error Banner */}
+        {setupErrorMsg && (
+          <div style={{
+            background: 'rgba(239, 68, 68, 0.08)',
+            border: '1px solid var(--error, #ef4444)',
+            borderRadius: 8,
+            padding: '12px 16px',
+            marginBottom: 20,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--error, #ef4444)', fontWeight: 600, fontSize: 13 }}>
+              <AlertTriangle size={18} />
+              <span>{setupErrorMsg}</span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => navigate('/login')}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <LogIn size={14} /> Sign In
+            </button>
+          </div>
+        )}
+
         {/* Progress Bar */}
         <div className="setup-progress">
           {STEPS.map((s, i) => (

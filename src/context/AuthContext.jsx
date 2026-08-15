@@ -33,7 +33,7 @@ export function AuthProvider({ children }) {
   // Access token stored in memory — never in localStorage or sessionStorage
   const accessTokenRef = useRef(null);
   const [user, setUser] = useState(null);
-  const [setupDone, setSetupDone] = useState(false);
+  const [setupDone, setSetupDone] = useState(true); // Default setupDone to true to prevent accidental fallback loops
   const [loading, setLoading] = useState(true); // true while attempting session restore & checking setup status
 
   // Expose access token getter for API calls
@@ -45,8 +45,8 @@ export function AuthProvider({ children }) {
     async function restore() {
       try {
         // 1. Check database setup-status
-        const { data: statusData } = await apiFetch('/auth/setup-status');
-        if (!cancelled && statusData && typeof statusData.setupDone === 'boolean') {
+        const { ok: statusOk, data: statusData } = await apiFetch('/auth/setup-status');
+        if (!cancelled && statusOk && statusData && typeof statusData.setupDone === 'boolean') {
           setSetupDone(statusData.setupDone);
         }
 

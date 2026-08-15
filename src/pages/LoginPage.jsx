@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import CollegeHeader from '../components/CollegeHeader';
 import {
@@ -7,6 +8,7 @@ import {
 } from 'lucide-react';
 
 export default function LoginPage() {
+  const navigate = useNavigate();
   const { login, registerAccount, fetchInstitutions } = useAuth();
 
   // Mode: 'login' | 'register' | 'home'
@@ -40,19 +42,19 @@ export default function LoginPage() {
   // Verification state for Public Home Page
   const [verifyDocId, setVerifyDocId] = useState('');
 
-  // Fetch registered institutions when switching to register mode
+  // Fetch registered institutions once when switching to register mode
   useEffect(() => {
     if (mode === 'register' && fetchInstitutions) {
       fetchInstitutions().then((list) => {
         if (Array.isArray(list)) {
           setInstitutions(list);
-          if (list.length > 0 && !regInstId) {
-            setRegInstId(list[0].id);
+          if (list.length > 0) {
+            setRegInstId(prev => prev || list[0].id);
           }
         }
       });
     }
-  }, [mode, fetchInstitutions, regInstId]);
+  }, [mode, fetchInstitutions]);
 
   const features = [
     { icon: <Zap size={18} color="#60a5fa" />, text: 'Multi-tenant cloud ERP for higher education institutions' },
@@ -82,6 +84,11 @@ export default function LoginPage() {
     setError('');
     setSuccessMsg('');
 
+    if (accountType === 'institution') {
+      navigate('/setup');
+      return;
+    }
+
     if (!regName.trim()) {
       setError('Full name is required.');
       return;
@@ -99,23 +106,18 @@ export default function LoginPage() {
       return;
     }
 
-    if (accountType === 'institution' && !regInstName.trim()) {
-      setError('College / Institution name is required.');
-      return;
-    }
-
     setLoading(true);
 
     try {
       const payload = {
-        accountType,
+        accountType: 'user',
         fullName: regName.trim(),
         email: regEmail.trim(),
         password: regPassword,
-        role: accountType === 'institution' ? 'SUPER_ADMIN' : 'STUDENT',
+        role: 'STUDENT',
         department: regDept,
-        institutionId: accountType === 'user' ? regInstId || undefined : undefined,
-        institutionName: accountType === 'institution' ? regInstName.trim() : undefined,
+        institutionId: regInstId || undefined,
+        institutionName: regInstName.trim() || undefined,
       };
 
       const result = await registerAccount(payload);
@@ -163,8 +165,11 @@ export default function LoginPage() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button className="btn btn-outline btn-sm" onClick={() => navigate('/setup')}>
+              <Building2 size={15} /> Register Your College
+            </button>
             <button className="btn btn-outline btn-sm" onClick={() => { setMode('register'); setError(''); }}>
-              <UserPlus size={15} /> Create Account
+              <UserPlus size={15} /> Create Student Account
             </button>
             <button className="btn btn-primary btn-sm" onClick={() => { setMode('login'); setError(''); }}>
               <LogIn size={15} /> Sign In to ERP
@@ -244,10 +249,17 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
-      {/* Top Navbar actions (Home link) */}
+      {/* Top Navbar actions (Home link & Register College link) */}
       <div style={{
         position: 'absolute', top: 20, right: 24, zIndex: 10, display: 'flex', gap: 10
       }}>
+        <button
+          className="btn btn-outline btn-sm"
+          style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)', backdropFilter: 'blur(8px)' }}
+          onClick={() => navigate('/setup')}
+        >
+          <Building2 size={15} /> Register Your College
+        </button>
         <button
           className="btn btn-outline btn-sm"
           style={{ background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)', backdropFilter: 'blur(8px)' }}
@@ -336,7 +348,7 @@ export default function LoginPage() {
               onClick={() => { setMode('register'); setError(''); setSuccessMsg(''); }}
             >
               <UserPlus size={14} style={{ display: 'inline', marginRight: 6 }} />
-              Create Account
+              Create Student Account
             </button>
           </div>
 
@@ -430,26 +442,38 @@ export default function LoginPage() {
                 )}
               </button>
 
-              <div style={{ textAlign: 'center', marginTop: 20, fontSize: 13, color: 'var(--text-muted)' }}>
-                Don't have an institutional account?{' '}
-                <button
-                  type="button"
-                  style={{ color: 'var(--accent)', background: 'none', border: 'none', fontWeight: 700, cursor: 'pointer', padding: 0 }}
-                  onClick={() => { setMode('register'); setError(''); }}
-                >
-                  Create Account
-                </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'center', marginTop: 20, fontSize: 13, color: 'var(--text-muted)' }}>
+                <div>
+                  Don't have an institutional account?{' '}
+                  <button
+                    type="button"
+                    style={{ color: 'var(--accent)', background: 'none', border: 'none', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                    onClick={() => { setMode('register'); setError(''); }}
+                  >
+                    Create Student Account
+                  </button>
+                </div>
+                <div>
+                  Registering a new college?{' '}
+                  <button
+                    type="button"
+                    style={{ color: 'var(--primary)', background: 'none', border: 'none', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                    onClick={() => navigate('/setup')}
+                  >
+                    Register Your College
+                  </button>
+                </div>
               </div>
             </form>
           )}
 
-          {/* CREATE ACCOUNT (REGISTER) FORM */}
+          {/* CREATE STUDENT ACCOUNT FORM */}
           {mode === 'register' && (
             <form onSubmit={handleRegister} noValidate>
-              <h2 style={{ fontSize: 20, fontWeight: 800 }}>Create Account</h2>
-              <p className="subtitle" style={{ marginBottom: 16 }}>Register for institutional ERP access</p>
+              <h2 style={{ fontSize: 20, fontWeight: 800 }}>Create Student Account</h2>
+              <p className="subtitle" style={{ marginBottom: 16 }}>Register for student portal access</p>
 
-              {/* Account Type Selector */}
+              {/* Account Type Selector / Direct College Register Navigation */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
                 <button
                   type="button"
@@ -461,66 +485,52 @@ export default function LoginPage() {
                   }}
                   onClick={() => setAccountType('user')}
                 >
-                  Student / Staff Account
+                  Student Account
                 </button>
                 <button
                   type="button"
                   style={{
                     flex: 1, padding: '6px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6,
                     border: '1px solid var(--border)', cursor: 'pointer',
-                    background: accountType === 'institution' ? 'var(--primary)' : '#fff',
-                    color: accountType === 'institution' ? '#fff' : 'var(--text-primary)',
+                    background: '#fff', color: 'var(--text-primary)',
                   }}
-                  onClick={() => setAccountType('institution')}
+                  onClick={() => navigate('/setup')}
                 >
                   <Building2 size={12} style={{ display: 'inline', marginRight: 4 }} />
-                  Register New College
+                  Register Your College
                 </button>
               </div>
 
-              {accountType === 'institution' ? (
-                <div className="form-group">
-                  <label className="form-label">College / Institution Name</label>
+              <div className="form-group">
+                <label className="form-label">Select Institution</label>
+                {institutions.length > 0 ? (
+                  <select
+                    className="form-select"
+                    value={regInstId}
+                    onChange={(e) => setRegInstId(e.target.value)}
+                  >
+                    {institutions.map((inst) => (
+                      <option key={inst.id} value={inst.id}>
+                        {inst.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
                   <input
-                    type="text" className="form-input"
-                    placeholder="e.g. St. Xavier's Institute of Technology"
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. CampusFlow University"
                     value={regInstName}
-                    onChange={(e) => { setRegInstName(e.target.value); setError(''); }}
-                    required
+                    onChange={(e) => setRegInstName(e.target.value)}
                   />
-                </div>
-              ) : (
-                <div className="form-group">
-                  <label className="form-label">Select Institution</label>
-                  {institutions.length > 0 ? (
-                    <select
-                      className="form-select"
-                      value={regInstId}
-                      onChange={(e) => setRegInstId(e.target.value)}
-                    >
-                      {institutions.map((inst) => (
-                        <option key={inst.id} value={inst.id}>
-                          {inst.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      type="text"
-                      className="form-input"
-                      placeholder="e.g. CampusFlow University"
-                      value={regInstName}
-                      onChange={(e) => setRegInstName(e.target.value)}
-                    />
-                  )}
-                </div>
-              )}
+                )}
+              </div>
 
               <div className="form-group">
                 <label className="form-label">Full Name</label>
                 <input
                   type="text" className="form-input"
-                  placeholder="e.g. Dr. Ramesh Kumar"
+                  placeholder="e.g. Ramesh Kumar"
                   value={regName}
                   onChange={(e) => { setRegName(e.target.value); setError(''); }}
                   required
@@ -538,32 +548,30 @@ export default function LoginPage() {
                 />
               </div>
 
-              {accountType === 'user' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                  <div className="form-group">
-                    <label className="form-label">Role</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value="Student"
-                      disabled
-                      style={{ background: 'var(--bg-main)', cursor: 'not-allowed', color: 'var(--text-muted)' }}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Department</label>
-                    <select className="form-select" value={regDept} onChange={(e) => setRegDept(e.target.value)}>
-                      <option value="CSE">CSE</option>
-                      <option value="ECE">ECE</option>
-                      <option value="ME">Mechanical</option>
-                      <option value="EEE">EEE</option>
-                      <option value="Civil">Civil</option>
-                      <option value="Exam">Exam Cell</option>
-                      <option value="All">All Departments</option>
-                    </select>
-                  </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group">
+                  <label className="form-label">Role</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value="Student"
+                    disabled
+                    style={{ background: 'var(--bg-main)', cursor: 'not-allowed', color: 'var(--text-muted)' }}
+                  />
                 </div>
-              )}
+                <div className="form-group">
+                  <label className="form-label">Department</label>
+                  <select className="form-select" value={regDept} onChange={(e) => setRegDept(e.target.value)}>
+                    <option value="CSE">CSE</option>
+                    <option value="ECE">ECE</option>
+                    <option value="ME">Mechanical</option>
+                    <option value="EEE">EEE</option>
+                    <option value="Civil">Civil</option>
+                    <option value="Exam">Exam Cell</option>
+                    <option value="All">All Departments</option>
+                  </select>
+                </div>
+              </div>
 
               <div className="form-group">
                 <label className="form-label">Password</label>
@@ -591,7 +599,7 @@ export default function LoginPage() {
                 {loading ? (
                   <><div className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} /> Creating Account...</>
                 ) : (
-                  <><UserPlus size={16} /> {accountType === 'institution' ? 'Register College & Admin' : 'Register & Sign In'}</>
+                  <><UserPlus size={16} /> Register & Sign In</>
                 )}
               </button>
 

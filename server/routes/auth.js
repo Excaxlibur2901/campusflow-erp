@@ -131,18 +131,6 @@ router.post('/setup', async (req, res, next) => {
     try {
       await client.query('BEGIN');
 
-      // Guard: if any SUPER_ADMIN user already exists, deny setup.
-      const existing = await client.query(
-        `SELECT 1 FROM users u
-         JOIN user_roles ur ON ur.user_id = u.id
-         JOIN roles r ON r.id = ur.role_id
-         WHERE r.code = 'SUPER_ADMIN' LIMIT 1`,
-      );
-      if (existing.rowCount > 0) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({ error: 'System is already set up. Use /login.' });
-      }
-
       // Check if admin email already belongs to an existing user
       const existingUser = await client.query(
         `SELECT 1 FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
@@ -150,7 +138,7 @@ router.post('/setup', async (req, res, next) => {
       );
       if (existingUser.rowCount > 0) {
         await client.query('ROLLBACK');
-        return res.status(400).json({ error: 'Administrator email already exists.' });
+        return res.status(409).json({ error: 'Administrator email already exists.' });
       }
 
       // 1. Create institution
