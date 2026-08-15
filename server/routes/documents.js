@@ -21,7 +21,8 @@ const router = Router();
 /* ── POST /api/documents (authenticated) ─────────────────────────── */
 router.post('/', authenticateUser, async (req, res, next) => {
   try {
-    const { documentType, title, payload = {}, institutionId, expiresAt } = req.body;
+    const { documentType, title, payload = {}, expiresAt } = req.body;
+    const institutionId = req.user.institution_id;
     if (!documentType?.trim()) return res.status(400).json({ error: 'documentType is required.' });
     if (!title?.trim())        return res.status(400).json({ error: 'title is required.' });
 
@@ -82,9 +83,9 @@ router.get('/', authenticateUser, async (req, res, next) => {
     const pageNum = Math.max(1, parseInt(page, 10));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
     const offset = (pageNum - 1) * limitNum;
-    const conds = [];
-    const params = [];
-    let idx = 1;
+    const conds = ['d.institution_id = $1'];
+    const params = [req.user.institution_id];
+    let idx = 2;
     if (type)   { conds.push(`d.document_type = $${idx++}`); params.push(type); }
     if (status) { conds.push(`d.status = $${idx++}`); params.push(status); }
     if (search) { conds.push(`(d.title ILIKE $${idx} OR d.document_number ILIKE $${idx})`); params.push(`%${search}%`); idx++; }
@@ -110,8 +111,8 @@ router.post('/:id/revoke', authenticateUser, requireRole('SUPER_ADMIN', 'PRINCIP
       await client.query('BEGIN');
       const result = await client.query(
         `UPDATE documents SET status = 'revoked', revoked_at = now(), updated_at = now()
-         WHERE id = $1 RETURNING *`,
-        [req.params.id],
+         WHERE id = $1 AND institution_id = $2 RETURNING *`,
+        [req.params.id, req.user.institution_id],
       );
       if (result.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Document not found.' }); }
       await client.query(

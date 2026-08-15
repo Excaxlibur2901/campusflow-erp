@@ -24,9 +24,9 @@ services:
     environment:
       API_PORT: "4000"
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:3000}
-      AUTH_ACCESS_TOKEN_SECRET: e66f67542d766d4d5325f1152a1d6f5a5e93a850e4219460fd05aa1f678b5d35
-      AUTH_REFRESH_TOKEN_SECRET: cecc63f27c88e985c725fc62a0f5077e001f84536383faa3e62961992aecbf29
-      DATABASE_URL: postgres://campusflow:${POSTGRES_PASSWORD:-VipulPotter}@postgres:5432/campusflow_erp
+      AUTH_ACCESS_TOKEN_SECRET: ${AUTH_ACCESS_TOKEN_SECRET}
+      AUTH_REFRESH_TOKEN_SECRET: ${AUTH_REFRESH_TOKEN_SECRET}
+      DATABASE_URL: ${DATABASE_URL:-postgres://campusflow:${POSTGRES_PASSWORD:-campusflow_dev_secret_change_me}@postgres:5432/campusflow_erp}
     depends_on:
       postgres:
         condition: service_healthy

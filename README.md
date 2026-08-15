@@ -1,165 +1,139 @@
 # CampusFlow ERP
 
-CampusFlow ERP is a modern, high-fidelity Enterprise Resource Planning (ERP) platform designed for academic institutions. Built using a high-performance **React + Vite** frontend, a **Node.js + Express** REST API, and a robust **PostgreSQL** database, it provides institutional management, automated timetable scheduling, anti-cheat exam seating allocation, attendance tracking, and official document generation.
+CampusFlow ERP is an Enterprise Resource Planning (ERP) platform for academic institutions. Built using a **React + Vite** SPA frontend, a **Node.js + Express** REST API, and a normalized **PostgreSQL** database, it provides multi-tenant institutional management, automated timetable scheduling, anti-cheat exam seating allocation, attendance tracking, marks management, and official document generation.
 
 ---
 
-## 🌟 Visual Identity & User Experience
+## 🌟 Architecture & Features Summary
 
-CampusFlow ERP features a premium user interface with:
-*   **Rich Design Aesthetics**: Curated color palettes with a slate-blue and teal tone, subtle glassmorphism card layouts, and clean typographic scaling using modern fonts.
-*   **Dynamic Animations & Micro-interactions**: Smooth page transitions, hover-responsive elements, animated status indicator rings, loading spinners, and interactive dashboards.
-*   **Responsive Sidebar Navigation**: A toggleable collapsible navigation menu featuring custom-styled active page indicators and quick links.
-*   **Real-time Notifications**: A global notification center alert-tray tracking system events such as document creations, seat plans, and attendance postings.
+*   **Multi-Tenant Data Isolation**: Every resource (departments, faculty, students, subjects, exams, attendance, marks, documents) is isolated by `institution_id`. Cross-tenant access is strictly blocked at the API layer.
+*   **Normalized PostgreSQL Database**: 20+ normalized database tables managed via additive migrations (`server/migrate.js`).
+*   **Secure Authentication & Session Management**: JWT access tokens coupled with HTTP-only refresh cookies (`campusflow_session`), atomic session creation in `user_sessions`, and password hashing via `bcryptjs` (cost 12).
+*   **Role-Based Access Control (RBAC)**: Backend role enforcement (`SUPER_ADMIN`, `PRINCIPAL`, `HOD`, `FACULTY`, `EXAM_CELL`, `STUDENT`) on every API endpoint.
+*   **First-Time Setup Wizard**: Guided institutional onboarding for setup of first institution and initial `SUPER_ADMIN` account. Public registration is restricted to `STUDENT` accounts only.
+*   **Constraint-Based Timetable Engine**: Deterministic timetable generator evaluating faculty clashes, room clashes, section clashes, room capacity, lab requirements (lab room + 2 consecutive slots), unavailable slots, and lunch breaks. Conflicts prevent DB write and return clear HTTP 409 conflict reports.
+*   **Anti-Cheat Exam Seating Planner**: Seat allocation using real registered students. Explicit bench-level mixing rules (`canShareBench`) enforce different subject, different year, and different section constraints per bench.
+*   **Attendance & Defaulter System**: Session-wise attendance recording with attendance percentage tracking and automated defaulter filtering (< 75%).
+*   **Marks & Assessment Module**: Multi-component grading (internal, midterm, final) with component locking, single/bulk entry, and score validation.
+*   **Document Generation & Verification**: Client-side document generation (PDF/DOCX) for Fee Receipts, Hall Tickets, Attendance Summaries, and Official Letters. Backend verification endpoint (`/api/verify/document/:id`).
 
 ---
 
-## 🛠️ Technology Stack & Architecture
+## 🛠️ Technology Stack
 
 ```mermaid
 graph TD
-    Client[React Frontend - Vite] <-->|HTTP REST & JSON| ExpressApp[Express API Server]
-    ExpressApp <-->|pg Client| Postgres[(PostgreSQL Database)]
-    Client <-->|Local Cache| LocalStorage[(Web LocalStorage)]
+    Client[React 19 Frontend - Vite] <-->|HTTP REST & JWT Bearer / Cookies| ExpressApp[Express 5 API Server]
+    ExpressApp <-->|pg Client Pool| Postgres[(PostgreSQL 16 Database)]
 ```
 
 ### 1. Frontend
-*   **Core**: React 18, React Router DOM (v6) for seamless client routing.
-*   **Styling**: Custom CSS styling with HSL variables supporting layout dimensions, badges, toast structures, table configurations, and modal overrides.
-*   **Visualization**: Dynamic, interactive charts powered by **Recharts** (Area, Line, Bar, and Pie charts).
-*   **Icons**: Rendered via **Lucide React**.
+*   **Framework**: React 19, React Router DOM (v7).
+*   **State Management**: `AuthContext.jsx` for authentication state & JWT lifecycle; `DataContext.jsx` for API data fetching.
+*   **Styling**: Vanilla CSS with custom HSL theme variables.
+*   **Charts & Icons**: Recharts & Lucide React.
 
 ### 2. Backend
-*   **Framework**: Node.js & Express.
-*   **Security & Enablement**: CORS enabled, dotenv for environment isolation, and parsing limits adjusted to `15MB` for base64 branding logo inputs.
+*   **Framework**: Node.js 20+, Express 5.
+*   **Database Client**: `pg` pool connecting to PostgreSQL 16.
+*   **Security**: Helmet headers, CORS policies, Express rate limiting, bcryptjs password hashing.
 
-### 3. Database & Synchronization Architecture
-Instead of relying on local browser storage or heavy ORMs, the application state is maintained inside a single row of a PostgreSQL table:
-*   **State Structure**: Stored inside the `app_state` table containing a `data` `JSONB` column.
-*   **Synchronization**: The React frontend uses a custom React Context (`DataContext.jsx`) that fetches the remote state on startup, saves a copy locally in browser `localStorage` as a fallback, and performs incremental `PATCH` operations to PostgreSQL on every action.
-*   **Offline Mode**: If the backend API goes offline, the app displays a warning toast, reads/writes to the local cached state in `localStorage`, and queues syncing, ensuring a resilient user experience.
-
----
-
-## 🔑 User Authentication & Default Roles
-
-CampusFlow ERP supports secure institutional accounts with distinct roles. For ease of testing, the system is seeded with the following default accounts (password for all default accounts is `Admin@123`):
-
-| Role | Email Address | Dept Scope | Permissions |
-| :--- | :--- | :--- | :--- |
-| **Super Admin** | `admin@campusflow.edu` | All | Master access to settings, wizard, backups, audits, and all CRUD screens. |
-| **Principal** | `principal@campusflow.edu` | All | Institutional overview, report exports, and custom letter signatory access. |
-| **Head of Department (HOD)** | `hod@campusflow.edu` | CSE | Departmental management, student approvals, and syllabus controls. |
-| **Faculty Member** | `faculty@campusflow.edu` | CSE | Marking attendance, viewing schedules, and checking workloads. |
-| **Exam Cell Officer** | `exam@campusflow.edu` | Exam | Generating exam timetables, seat allocations, and printing hall tickets. |
-| **Student** | `student@campusflow.edu` | CSE | Viewing individual timetables, attendance status, and downloading documents. |
-
-*Note: New users can also register via the Signup form on the login screen.*
+### 3. Database
+*   **Engine**: PostgreSQL 16 Alpine.
+*   **Migrations**: Automated migration runner (`node server/migrate.js`) executing SQL scripts in `server/migrations/`.
 
 ---
 
-## 📦 Core Modules & Features
+## 🔑 Authentication & Setup Workflow
 
-### 1. Onboarding & Setup Wizard
-*   Activated automatically on first launch if `setupDone` is false.
-*   Guides administrators through a 6-step setup:
-    1. **Welcome Introduction**: System capabilities tour.
-    2. **Branding Setup**: Uploading a college logo (under 2MB) and entering institutional name/affiliation.
-    3. **Institutional Details**: Autonomous status, established year, AISHE code, NAAC grade, and motto.
-    4. **Academic Departments**: Initial registration of active departments.
-    5. **Classrooms Config**: Configuring initial lecture halls, computer labs, and seminar halls.
-    6. **Preview & Deploy**: Live rendering check of the branding layout before writing the initial state.
-
-### 2. Smart Timetable Scheduling Engine
-*   **Scheduling Algorithm**: Avoids scheduling conflicts by evaluating constraints:
-    *   No double-booking for classrooms.
-    *   No double-booking for faculty members.
-    *   Maintains weekly hour constraints for subjects.
-*   **Scheduling Tools**:
-    *   *Lock/Unlock*: Prevent specific slots from being modified by automatic generations.
-    *   *Clear Slots*: Quickly flush individual hours or clean all unlocked slots.
-*   **Multi-View Layout**: Filter timetables by Admin View, Student View, Faculty View, or Classroom View.
-
-### 3. Exam Seating & Anti-Cheat Grid Planner
-*   **Anti-Cheat Algorithm**: Mixes students from different departments based on a seating matrix. No two adjacent seats will host students from the same department, reducing chances of malpractice.
-*   **Interactive Seat Grid**: Displays an 8×10 visual map of the exam hall, color-coded by department. Seats show student roll numbers and highlight absences.
-*   **Statistics Panel**: Tracks metrics like total halls used, seats filled, departments mixed, and adjacency violations.
-
-### 4. Attendance & Defaulter System
-*   **Daily Attendance Ledger**: Faculty can mark session-wise attendance by selecting Department, Subject, Section, Date, and Slot.
-*   **Batch Operations**: Quick buttons for "Mark All Present" or "Mark All Absent".
-*   **Defaulter Analyzer**: Highlights students falling below the mandatory **75%** attendance threshold, with warning status badges.
-*   **Visual Reports**: Visualizes attendance history and subject-wise averages via Recharts.
-
-### 5. High-Fidelity Document & Report Generator
-Produces official, printable documents in **PDF** (via `jsPDF` + `jspdf-autotable`) and **DOCX** (via `docx` package) formats:
-*   **Branded Header**: Embedded logo, contact information, NAAC grades, autonomous status, and university affiliation.
-*   **Deterministic QR Verification**: Generates a custom MurmurHash3-derived QR-style canvas stamp embedded directly in the document. This QR stamp is a unique, visual authenticity mark generated deterministically from the document's content.
-*   **Document Types**:
-    1. **Fee Receipt**: Generates itemized billing breakdowns (Tuition, Lab, Library, Exam fees) with payment modes (Cash, UPI, Cards, Bank Transfer) and transactional IDs.
-    2. **Hall Ticket**: Individual student admit cards with exam dates, subjects, allocated room codes, and QR verification codes.
-    3. **Attendance Summary**: Official subject-wise student attendance registers.
-    4. **Official Letter**: Custom letter generator complete with signature designations (Principal, HOD) and margin margins.
-    5. **Timetable / Seating Chart**: Exportable timetables and seat maps for offline printouts.
-
-### 6. Security, Backups & Compliance Auditing
-*   **Security Configuration**: Manage authentication settings, JWT parameters, HTTPS enforcements, and password hash costs.
-*   **JSON Backup System**: Export the entire database state to a local JSON file, or restore the system by uploading an existing backup file.
-*   **Compliance Auditing**: A system-wide audit page logging every write operation:
-    *   **Fields**: Timestamp, Operator, Action Type (CREATE, UPDATE, DELETE, GENERATE, SUBMIT), Source Module, Target Entity, and simulated IP Address.
-
----
-
-## 🚀 Local Setup & Installation
-
-### Requirements
-*   **Node.js 20+**
-*   **Docker Desktop** (or a local PostgreSQL server)
-
-### Step-by-Step Setup
-
-1.  **Clone & Install Dependencies**:
-    ```bash
-    npm install
-    ```
-
-2.  **Environment Setup**:
-    Copy the environment template:
-    ```bash
-    copy .env.example .env
-    ```
-    *Ensure the environment variables match your local setup. Default ports are `5173` for frontend and `4000` for API.*
-
-3.  **Spin up PostgreSQL DB via Docker**:
-    ```bash
-    npm run db:up
-    ```
-    *This starts a local PostgreSQL instance inside Docker. The container is configured with username: `campusflow`, password: `campusflow`, and database: `campusflow_erp` on port `5432`.*
-
-4.  **Launch Concurrent Development Servers**:
-    ```bash
-    npm run dev
-    ```
-    *This runs the Express API server (on port `4000`) and the Vite React development server (on port `5173`) concurrently.*
+1.  **Initial Setup Wizard**: On a fresh database, accessing the web app opens the Setup Wizard (`POST /api/auth/setup`). This creates the initial `Institution` and primary `SUPER_ADMIN` account.
+2.  **Public Registration**: Public user signup (`POST /api/auth/register`) is strictly limited to creating `STUDENT` accounts. Unrestricted public institution/admin creation is disabled.
+3.  **Session Security**: Successful logins generate an access token and record a secure HTTP-only refresh session token in the database (`user_sessions`).
 
 ---
 
 ## 📡 API Reference
 
-The backend API automatically initializes the database tables and schemas on startup.
+All protected endpoints require a `Bearer <token>` Authorization header or valid session cookie.
 
-| Method | Endpoint | Description | Request Body |
-| :--- | :--- | :--- | :--- |
-| **GET** | `/api/health` | Checks backend server status and verifies active PostgreSQL database connection. | N/A |
-| **GET** | `/api/state` | Returns the entire current system state JSON document. | N/A |
-| **PATCH** | `/api/state` | Marginally patches the JSONB data column. | Partial state JSON object |
-| **POST** | `/api/reset` | Clears all custom changes and resets the system state to empty template state. | N/A |
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| **GET** | `/api/health` | Backend status & PostgreSQL database health check |
+| **GET** | `/api/auth/setup-status` | Check if initial institution setup is completed |
+| **POST** | `/api/auth/setup` | Create first institution and SUPER_ADMIN account |
+| **POST** | `/api/auth/login` | Authenticate user & issue access token + refresh cookie |
+| **POST** | `/api/auth/register` | Student account registration |
+| **POST** | `/api/auth/refresh` | Rotate refresh token and issue new access token |
+| **POST** | `/api/auth/logout` | Revoke session and clear refresh cookie |
+| **GET** | `/api/auth/me` | Fetch active authenticated profile & roles |
+| **GET/POST/PUT/DELETE** | `/api/departments` | Department management (tenant isolated) |
+| **GET/POST/PUT/DELETE** | `/api/academic/*` | Programs, semesters, and sections management |
+| **GET/POST/PUT/DELETE** | `/api/faculty` | Faculty members management |
+| **GET/POST/PUT/DELETE** | `/api/students` | Student records management |
+| **GET/POST/PUT/DELETE** | `/api/subjects` | Course subjects management |
+| **GET/POST** | `/api/attendance/*` | Attendance sessions, records, percentage, & defaulters |
+| **GET/POST/PUT** | `/api/marks/*` | Mark components, lock, single, & bulk mark entry |
+| **GET/POST/PUT/DELETE** | `/api/exams/*` | Exam setup, subjects, halls, registrations, seating |
+| **GET/POST/PUT/DELETE** | `/api/timetable/*` | Timetable grid, generation engine, move validation |
+| **GET/POST** | `/api/documents` | Document metadata & verification (`/api/verify/document/:id`) |
+| **GET** | `/api/audit` | System audit logs (tenant isolated) |
 
-Useful testing commands:
+---
+
+## 📦 Environment Variables & Security
+
+Copy `.env.example` to `.env` before starting the application:
+
 ```bash
-# Health check
-curl http://localhost:4000/api/health
-
-# State fetch
-curl http://localhost:4000/api/state
+cp .env.example .env
 ```
+
+Key environment variables:
+*   `API_PORT`: Express server port (default: `4000`)
+*   `CLIENT_ORIGIN`: Allowed CORS origin (default: `http://localhost:5173`)
+*   `DATABASE_URL`: PostgreSQL connection string (`postgres://user:password@host:5432/dbname`)
+*   `POSTGRES_PASSWORD`: Database password for Docker Compose
+*   `AUTH_ACCESS_TOKEN_SECRET`: Secret key for JWT access tokens
+*   `AUTH_REFRESH_TOKEN_SECRET`: Secret key for JWT refresh tokens
+*   `SESSION_COOKIE_NAME`: Cookie name for session tokens (default: `campusflow_session`)
+*   `BCRYPT_COST`: Password hash salt rounds (default: `12`)
+
+*Note: `.env` is listed in `.gitignore` and must never be committed to source control.*
+
+---
+
+## 🚀 Development Commands
+
+```bash
+# Spin up local PostgreSQL container via Docker
+npm run db:up
+
+# Run database schema migrations
+npm run db:migrate
+
+# Launch concurrent Express backend and Vite frontend dev servers
+npm run dev
+
+# Run Express backend server only (Port 4000)
+npm run server
+
+# Run Vite frontend dev server only (Port 5173)
+npm run client
+
+# Stop local PostgreSQL container
+npm run db:down
+```
+
+---
+
+## 🐳 Docker Deployment
+
+To run CampusFlow ERP using Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+This starts:
+1. `campusflow-postgres`: PostgreSQL 16 container.
+2. `campusflow-app`: Production container running Nginx & Express backend.

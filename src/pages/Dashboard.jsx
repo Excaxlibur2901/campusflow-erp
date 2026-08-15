@@ -1,4 +1,4 @@
-﻿import { useMemo } from 'react';
+import { useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import {
@@ -45,7 +45,7 @@ function AdminDashboard() {
 
   // Real department-wise average attendance from studentsList
   const attendanceData = useMemo(() => departments.map(d => {
-    const deptStudents = studentsList.filter(s => s.dept === d.code || s.department === d.name);
+    const deptStudents = studentsList.filter(s => s.dept_code === d.code);
     const avg = deptStudents.length > 0
       ? Math.round(deptStudents.reduce((a, s) => a + (s.attendance || 0), 0) / deptStudents.length)
       : 0;
@@ -56,7 +56,7 @@ function AdminDashboard() {
   const classroomTypes = useMemo(() => {
     if (classroomsList.length === 0) return [];
     const counts = {};
-    classroomsList.forEach(r => { counts[r.type || 'Other'] = (counts[r.type || 'Other'] || 0) + 1; });
+    classroomsList.forEach(r => { counts[r.room_type || 'lecture'] = (counts[r.room_type || 'lecture'] || 0) + 1; });
     return Object.entries(counts).map(([name, value]) => ({ name, value }));
   }, [classroomsList]);
 
@@ -82,12 +82,10 @@ function AdminDashboard() {
 
   // Faculty workload grouped by department
   const workloadData = useMemo(() => departments.map(d => {
-    const deptFaculty = facultyList.filter(f => f.department === d.name);
-    const avgLoad = deptFaculty.length > 0
-      ? Math.round(deptFaculty.reduce((a, f) => a + (f.currentHours || 0), 0) / deptFaculty.length)
-      : 0;
+    const deptFaculty = facultyList.filter(f => f.dept_code === d.code);
+    const avgLoad = 0; // Current hours not yet tracked in backend
     const avgMax = deptFaculty.length > 0
-      ? Math.round(deptFaculty.reduce((a, f) => a + (f.maxHours || 0), 0) / deptFaculty.length)
+      ? Math.round(deptFaculty.reduce((a, f) => a + (f.max_weekly_hours || 0), 0) / deptFaculty.length)
       : 0;
     return { dept: d.code, currentHours: avgLoad, maxHours: avgMax };
   }), [departments, facultyList]);
@@ -96,9 +94,9 @@ function AdminDashboard() {
     <>
       <div className="stats-grid">
         <StatCard icon={Building} iconBg="linear-gradient(135deg, #1B3A6B, #2E75B6)" value={departments.length} label="Active Departments" trend={`${departments.length} total`} trendDir="up" />
-        <StatCard icon={GraduationCap} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={facultyList.length} label="Total Faculty" trend={`${facultyList.filter(f => f.currentHours < f.maxHours).length} available`} trendDir="up" />
-        <StatCard icon={Users} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={studentsList.length.toLocaleString()} label="Total Students" trend={`${studentsList.filter(s => s.attendance >= 75).length} regular`} trendDir="up" />
-        <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={examsList.length} label="Exam Events" trend={`${examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming').length} upcoming`} trendDir="up" />
+        <StatCard icon={GraduationCap} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={facultyList.length} label="Total Faculty" trend={`${facultyList.length} registered`} trendDir="up" />
+        <StatCard icon={Users} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={studentsList.length.toLocaleString()} label="Total Students" trend={`${studentsList.filter(s => s.status === 'ACTIVE').length} active`} trendDir="up" />
+        <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={examsList.length} label="Exam Events" trend={`${examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming' || e.status === 'UPCOMING').length} upcoming`} trendDir="up" />
       </div>
       <div className="charts-grid">
         <div className="chart-card">
@@ -254,24 +252,24 @@ function StudentDashboard() {
 
   // Find logged-in student record
   const myRecord = useMemo(() =>
-    studentsList.find(s => s.email === user?.email) || studentsList[0],
+    studentsList.find(s => s.email === user?.email) || null,
     [studentsList, user]
   );
 
   // Subjects for the student's department
   const mySubjects = useMemo(() =>
-    subjectsList.filter(s => s.department === myRecord?.department || s.dept === myRecord?.dept),
+    myRecord ? subjectsList.filter(s => s.dept_code === myRecord.dept_code) : [],
     [subjectsList, myRecord]
   );
 
   const avgAttendance = myRecord?.attendance || 0;
-  const upcomingExams = examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming').length;
+  const upcomingExams = examsList.filter(e => e.status === 'Upcoming' || e.status === 'upcoming' || e.status === 'UPCOMING').length;
 
   return (
     <>
       <div className="stats-grid">
         <StatCard icon={Calendar} iconBg="linear-gradient(135deg, #2E75B6, #60a5fa)" value={mySubjects.length} label="Enrolled Subjects" />
-        <StatCard icon={UserCheck} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={`${avgAttendance}%`} label="Overall Attendance" />
+        <StatCard icon={UserCheck} iconBg="linear-gradient(135deg, #16A34A, #4ade80)" value={avgAttendance > 0 ? `${avgAttendance}%` : 'N/A'} label="Overall Attendance" />
         <StatCard icon={ClipboardList} iconBg="linear-gradient(135deg, #D97706, #fbbf24)" value={upcomingExams} label="Upcoming Exams" />
         <StatCard icon={FileText} iconBg="linear-gradient(135deg, #8b5cf6, #a78bfa)" value={upcomingExams > 0 ? 'Available' : 'None'} label="Hall Tickets" />
       </div>
@@ -287,7 +285,7 @@ function StudentDashboard() {
                   <td style={{ color: 'var(--text-muted)' }}>{s.code}</td>
                   <td>{s.semester}</td>
                   <td>{s.credits}</td>
-                  <td><span className={`badge ${s.type === 'Lab' ? 'badge-warning' : 'badge-neutral'}`}>{s.type}</span></td>
+                  <td><span className={`badge ${s.subject_type === 'Lab' || s.subject_type === 'lab' ? 'badge-warning' : 'badge-neutral'}`}>{s.subject_type || 'Theory'}</span></td>
                 </tr>
               ))}
             </tbody>

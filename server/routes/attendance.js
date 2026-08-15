@@ -23,6 +23,19 @@ router.post('/sessions', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD', 'FACULTY
     const { subjectOfferingId, facultyId, sectionId, timeSlotId, sessionDate } = req.body;
     if (!sessionDate) return res.status(400).json({ error: 'Session date is required.' });
 
+    // Verify institution ownership of faculty, subject offering, and section
+    const ownershipCheck = await pool.query(
+      `SELECT 
+         (SELECT COUNT(*) FROM faculty WHERE id = $1 AND institution_id = $4) AS fac_valid,
+         (SELECT COUNT(*) FROM subject_offerings so JOIN subjects s ON s.id = so.subject_id JOIN departments d ON d.id = s.department_id WHERE so.id = $2 AND d.institution_id = $4) AS so_valid,
+         (SELECT COUNT(*) FROM sections sec JOIN semesters sem ON sem.id = sec.semester_id JOIN programs p ON p.id = sem.program_id JOIN departments d ON d.id = p.department_id WHERE sec.id = $3 AND d.institution_id = $4) AS sec_valid`,
+      [facultyId ?? null, subjectOfferingId ?? null, sectionId ?? null, req.user.institution_id]
+    );
+    const checks = ownershipCheck.rows[0];
+    if (facultyId && parseInt(checks.fac_valid) === 0) return res.status(403).json({ error: 'Unauthorized or invalid faculty.' });
+    if (subjectOfferingId && parseInt(checks.so_valid) === 0) return res.status(403).json({ error: 'Unauthorized or invalid subject offering.' });
+    if (sectionId && parseInt(checks.sec_valid) === 0) return res.status(403).json({ error: 'Unauthorized or invalid section.' });
+
     // Prevent duplicate sessions
     const dup = await pool.query(
       `SELECT id FROM attendance_sessions
@@ -51,9 +64,9 @@ router.get('/sessions', async (req, res, next) => {
     const pageNum = Math.max(1, parseInt(page, 10));
     const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
     const offset = (pageNum - 1) * limitNum;
-    const conds = [];
-    const params = [];
-    let idx = 1;
+    const conds = ['d.institution_id = $1'];
+    const params = [req.user.institution_id];
+    let idx = 2;
     if (sectionId) { conds.push(`s.section_id = $${idx++}`); params.push(sectionId); }
     if (date)      { conds.push(`s.session_date = $${idx++}`); params.push(date); }
     if (status)    { conds.push(`s.status = $${idx++}`); params.push(status); }
@@ -63,6 +76,9 @@ router.get('/sessions', async (req, res, next) => {
               COUNT(ar.id) FILTER (WHERE ar.status = 'present')::int AS present_count
        FROM attendance_sessions s
        LEFT JOIN attendance_records ar ON ar.attendance_session_id = s.id
+       LEFT JOIN subject_offerings so ON so.id = s.subject_offering_id
+       LEFT JOIN subjects sub ON sub.id = so.subject_id
+       LEFT JOIN departments d ON d.id = sub.department_id
        ${where}
        GROUP BY s.id
        ORDER BY s.session_date DESC, s.created_at DESC
@@ -84,7 +100,13 @@ router.post('/sessions/:id/records', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HO
     }
 
     // Verify session exists and is not locked
-    const sessionResult = await pool.query('SELECT * FROM attendance_sessions WHERE id = $1', [sessionId]);
+    const sessionResult = await pool.query(`
+      SELECT s.* FROM attendance_sessions s
+      LEFT JOIN subject_offerings so ON so.id = s.subject_offering_id
+      LEFT JOIN subjects sub ON sub.id = so.subject_id
+      LEFT JOIN departments d ON d.id = sub.department_id
+      WHERE s.id = $1 AND d.institution_id = $2
+    `, [sessionId, req.user.institution_id]);
     if (sessionResult.rowCount === 0) return res.status(404).json({ error: 'Session not found.' });
     if (sessionResult.rows[0].status === 'locked') {
       return res.status(403).json({ error: 'This attendance session is locked and cannot be modified.' });
@@ -94,6 +116,16 @@ router.post('/sessions/:id/records', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HO
     const invalid = records.filter((r) => !validStatuses.includes(r.status));
     if (invalid.length) {
       return res.status(400).json({ error: `Invalid status values: ${invalid.map((r) => r.status).join(', ')}` });
+    }
+
+    // Verify student ownership
+    const studentIds = records.map(r => r.studentId);
+    const validStudents = await pool.query(
+      `SELECT id FROM students WHERE id = ANY($1::uuid[]) AND institution_id = $2`,
+      [studentIds, req.user.institution_id]
+    );
+    if (validStudents.rowCount !== studentIds.length) {
+      return res.status(403).json({ error: 'One or more students do not belong to your institution.' });
     }
 
     const client = await pool.connect();
@@ -147,8 +179,9 @@ router.get('/students/:studentId/percentage', async (req, res, next) => {
            THEN ROUND((COUNT(ar.id) FILTER (WHERE ar.status = 'present')::numeric / COUNT(ar.id)) * 100, 2)
            ELSE 0
          END AS percentage
-       FROM attendance_records ar
-       WHERE ar.student_id = $1`,
+        FROM attendance_records ar
+        INNER JOIN students st ON st.id = ar.student_id
+        WHERE ar.student_id = $1 AND st.institution_id = $2`,
       [req.params.studentId],
     );
     return res.json(result.rows[0] ?? { total_classes: 0, present_count: 0, absent_count: 0, percentage: 0 });
@@ -173,12 +206,12 @@ router.get('/defaulters', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD', 'FACULT
        LEFT JOIN attendance_records ar ON ar.student_id = s.id
        LEFT JOIN departments d ON d.id = s.department_id
        LEFT JOIN sections sec ON sec.id = s.section_id
-       WHERE s.status = 'ACTIVE'
+       WHERE s.status = 'ACTIVE' AND s.institution_id = $1
        GROUP BY s.id, d.code, sec.code
        HAVING COUNT(ar.id) > 0 AND
               ROUND((COUNT(ar.id) FILTER (WHERE ar.status = 'present')::numeric / COUNT(ar.id)) * 100, 2) < $1
        ORDER BY percentage ASC`,
-      [threshold],
+      [req.user.institution_id, threshold],
     );
     return res.json(result.rows);
   } catch (err) { next(err); }
@@ -212,10 +245,11 @@ router.get('/history', async (req, res, next) => {
        LEFT JOIN semesters sem ON sem.id = sec.semester_id
        LEFT JOIN programs p ON p.id = sem.program_id
        LEFT JOIN departments d ON d.id = p.department_id
+       WHERE d.institution_id = $1
        GROUP BY s.id, sub.code, sub.name, d.code, sec.code
        ORDER BY s.session_date DESC
-       LIMIT $1 OFFSET $2`,
-      [limitNum, offset],
+       LIMIT $2 OFFSET $3`,
+      [req.user.institution_id, limitNum, offset],
     );
     return res.json(result.rows);
   } catch (err) { next(err); }

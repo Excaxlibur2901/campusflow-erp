@@ -35,7 +35,6 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL'), async (req, res, next) => {
   try {
-  try {
     const { code, name } = req.body;
     if (!code?.trim()) return res.status(400).json({ error: 'Department code is required.' });
     if (!name?.trim()) return res.status(400).json({ error: 'Department name is required.' });

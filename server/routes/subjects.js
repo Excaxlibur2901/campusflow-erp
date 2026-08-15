@@ -24,7 +24,7 @@ router.get('/', async (req, res, next) => {
     const result = await pool.query(
       `SELECT s.*, d.code AS dept_code, d.name AS dept_name
        FROM subjects s
-       LEFT JOIN departments d ON d.id = s.department_id
+       INNER JOIN departments d ON d.id = s.department_id
        ${where}
        ORDER BY d.code, s.code`,
       params,
@@ -38,6 +38,10 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res
     const { code, name, subjectType, credits, weeklyHours, departmentId } = req.body;
     if (!code?.trim()) return res.status(400).json({ error: 'Subject code is required.' });
     if (!name?.trim()) return res.status(400).json({ error: 'Subject name is required.' });
+
+    const deptCheck = await pool.query('SELECT id FROM departments WHERE id = $1 AND institution_id = $2', [departmentId, req.user.institution_id]);
+    if (deptCheck.rowCount === 0) return res.status(404).json({ error: 'Department not found.' });
+
     const result = await pool.query(
       `INSERT INTO subjects (department_id, code, name, subject_type, credits, weekly_hours, created_by, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,
@@ -54,7 +58,11 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res
 
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM subjects WHERE id = $1', [req.params.id]);
+    const before = await pool.query(`
+      SELECT s.* FROM subjects s
+      INNER JOIN departments d ON d.id = s.department_id
+      WHERE s.id = $1 AND d.institution_id = $2
+    `, [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Subject not found.' });
     const { code, name, subjectType, credits, weeklyHours, active } = req.body;
     const result = await pool.query(
@@ -74,7 +82,11 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
 
 router.delete('/:id', requireRole('SUPER_ADMIN', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM subjects WHERE id = $1', [req.params.id]);
+    const before = await pool.query(`
+      SELECT s.* FROM subjects s
+      INNER JOIN departments d ON d.id = s.department_id
+      WHERE s.id = $1 AND d.institution_id = $2
+    `, [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Subject not found.' });
     await pool.query('DELETE FROM subjects WHERE id = $1', [req.params.id]);
     await auditLog({ userId: req.user.id, action: 'DELETE', module: 'Subjects', entity: before.rows[0].name, entityId: req.params.id, before: before.rows[0] });

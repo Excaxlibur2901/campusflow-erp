@@ -1,21 +1,16 @@
 /**
  * Anti-Cheat Exam Seating Allocation Engine — CampusFlow ERP
  *
- * Implements 7-step anti-cheat allocation:
- *   1. Group registered students (by subject/dept)
- *   2. Order/interleave groups (preserving roll number order within streams)
- *   3. Generate candidate allocations across real physical seats
- *   4. Score adjacency conflicts (orthogonal + diagonal neighbors)
- *   5. Select best candidate allocation
- *   6. Perform local improvement / swap pass
- *   7. Validate final arrangement
- *
- * Hard Constraints (Never violated):
- *   - One student per seat
- *   - One seat per student
- *   - Do not exceed hall capacity
- *   - Only allocate registered non-absent students
- *   - Do not allocate to unavailable/locked seats
+ * Implements anti-cheat allocation with explicit bench-level constraint enforcement:
+ *   1. Group registered students (by subject/dept/year)
+ *   2. Order/interleave groups
+ *   3. Generate candidate allocations with EXPLICIT BENCH MIXING CONSTRAINTS:
+ *        - Two students sharing a bench MUST have different subjects
+ *        - Two students sharing a bench MUST have different academic years
+ *        - Two students sharing a bench MUST have different classes/sections
+ *   4. Spatial & adjacency scoring
+ *   5. Swap optimization pass (preserving bench constraints)
+ *   6. Explicit validation & conflict reporting for impossible seating
  */
 
 export const DEFAULT_WEIGHTS = {
@@ -30,14 +25,42 @@ export const DEFAULT_WEIGHTS = {
 };
 
 /**
- * Score pair of adjacent students. Higher is better (more anti-cheat separation).
+ * Check if two students are allowed to share the same bench.
+ */
+export function canShareBench(studentA, studentB) {
+  if (!studentA || !studentB) return true;
+
+  // Constraint 1: Different Subject
+  const sameSubject =
+    (studentA.subjectId && studentB.subjectId && studentA.subjectId === studentB.subjectId) ||
+    (studentA.examSubjectId && studentB.examSubjectId && studentA.examSubjectId === studentB.examSubjectId) ||
+    (studentA.subjectCode && studentB.subjectCode && studentA.subjectCode === studentB.subjectCode);
+  if (sameSubject) return false;
+
+  // Constraint 2: Different Year
+  if (studentA.year && studentB.year && Number(studentA.year) === Number(studentB.year)) {
+    return false;
+  }
+
+  // Constraint 3: Different Class / Section
+  const sameSection =
+    (studentA.sectionId && studentB.sectionId && studentA.sectionId === studentB.sectionId) ||
+    (studentA.departmentId === studentB.departmentId &&
+      studentA.year === studentB.year &&
+      studentA.sectionCode === studentB.sectionCode);
+  if (sameSection) return false;
+
+  return true;
+}
+
+/**
+ * Score pair of adjacent students. Higher is better.
  */
 export function scoreNeighborPair(studentA, studentB, weights = DEFAULT_WEIGHTS) {
   if (!studentA || !studentB) return 0;
   const w = { ...DEFAULT_WEIGHTS, ...weights };
 
   let score = 0;
-  // High Priority: Avoid same subject & same class/section
   if (studentA.subjectId === studentB.subjectId) {
     score += w.sameSubject;
   } else {
@@ -74,14 +97,6 @@ export function scoreNeighborPair(studentA, studentB, weights = DEFAULT_WEIGHTS)
 
 /**
  * Main Seating Allocation Generator.
- *
- * @param {object} params
- * @param {Array} params.registrations - Registered student objects from PostgreSQL
- * @param {Array} params.seats - Hall seat objects from PostgreSQL
- * @param {Array} [params.lockedAllocations] - Existing locked allocations to preserve
- * @param {object} [params.weights] - Scoring weights override
- *
- * @returns {{ allocations: Array, score: number, conflicts: Array, warnings: Array, unallocatedStudents: Array, report: object }}
  */
 export function generateSeating({ registrations = [], seats = [], lockedAllocations = [], weights = {} }) {
   const w = { ...DEFAULT_WEIGHTS, ...weights };
@@ -120,22 +135,37 @@ export function generateSeating({ registrations = [], seats = [], lockedAllocati
     };
   }
 
-  // STEP 1: Group registered students by subjectId / examSubjectId
+  // Normalize bench number for seats
+  const normalizedSeats = usableSeats.map(s => ({
+    ...s,
+    benchNumber: s.benchNumber || s.bench_number || Math.ceil((s.columnNumber || 1) / (s.seatsPerBench || 2)),
+  }));
+
+  // Group seats into benches
+  const benchesMap = new Map();
+  normalizedSeats.forEach(seat => {
+    const key = `${seat.hallId || 'H1'}-${seat.benchNumber}`;
+    if (!benchesMap.has(key)) benchesMap.set(key, []);
+    benchesMap.get(key).push(seat);
+  });
+
+  // Sort benches by hallId, then benchNumber
+  const sortedBenches = [...benchesMap.entries()].sort(([aKey], [bKey]) => aKey.localeCompare(bKey));
+
+  // Group students by subject
   const subjectGroups = new Map();
   for (const student of unallocatedRegs) {
-    const key = student.subjectId || student.examSubjectId || 'GLOBAL';
-    if (!subjectGroups.has(key)) {
-      subjectGroups.set(key, []);
-    }
+    const key = student.subjectId || student.examSubjectId || student.subjectCode || 'GLOBAL';
+    if (!subjectGroups.has(key)) subjectGroups.set(key, []);
     subjectGroups.get(key).push(student);
   }
 
-  // STEP 2: Order within group by Roll Number for attendance convenience, then interleave
+  // Sort within groups by Roll Number
   for (const [, group] of subjectGroups) {
     group.sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || '', undefined, { numeric: true }));
   }
 
-  // Interleave groups in round-robin order
+  // Interleave students across subject groups
   const interleavedStudents = [];
   const iterators = [...subjectGroups.values()].map(g => g[Symbol.iterator]());
   let active = true;
@@ -150,93 +180,84 @@ export function generateSeating({ registrations = [], seats = [], lockedAllocati
     }
   }
 
-  // STEP 3: Generate candidate layout strategies
-  // Sort seats primarily by hallId, then row, then column
-  const sortedSeats = [...usableSeats].sort((a, b) => {
-    if (a.hallId !== b.hallId) return (a.hallId || '').localeCompare(b.hallId || '');
-    if (a.rowNumber !== b.rowNumber) return a.rowNumber - b.rowNumber;
-    return a.columnNumber - b.columnNumber;
-  });
-
-  // Candidate 1: Sequential Row-major allocation
+  // Bench-aware placement
   const candidateAllocations = [];
-  const seatMap = new Map(lockedAllocations.map(a => [a.hallSeatId, a]));
-  const studentMap = new Map(lockedAllocations.map(a => [a.studentId, a]));
-
   const unallocatedStudents = [];
+  const remainingStudents = [...interleavedStudents];
 
-  for (let i = 0; i < interleavedStudents.length; i++) {
-    const student = interleavedStudents[i];
-    const seat = sortedSeats[i];
+  for (const [, benchSeats] of sortedBenches) {
+    const benchAllocatedStudents = [];
 
-    if (!seat) {
-      unallocatedStudents.push(student);
-      continue;
+    for (const seat of benchSeats) {
+      if (!remainingStudents.length) break;
+
+      // Find first remaining student compatible with current bench occupants
+      const matchIdx = remainingStudents.findIndex(candidate =>
+        benchAllocatedStudents.every(occ => canShareBench(candidate, occ))
+      );
+
+      if (matchIdx !== -1) {
+        const student = remainingStudents.splice(matchIdx, 1)[0];
+        benchAllocatedStudents.push(student);
+
+        const alloc = {
+          hallSeatId: seat.id,
+          studentId: student.studentId,
+          studentName: student.studentName,
+          rollNumber: student.rollNumber,
+          enrollmentNumber: student.enrollmentNumber || '',
+          departmentId: student.departmentId,
+          deptCode: student.deptCode || 'GEN',
+          year: Number(student.year || 1),
+          semester: Number(student.semester || 1),
+          sectionId: student.sectionId,
+          sectionCode: student.sectionCode || 'A',
+          subjectId: student.subjectId,
+          subjectCode: student.subjectCode || 'SUBJ',
+          subjectName: student.subjectName || '',
+          examSubjectId: student.examSubjectId,
+          rowNumber: seat.rowNumber,
+          columnNumber: seat.columnNumber,
+          benchNumber: seat.benchNumber,
+          seatNumber: seat.seatNumber,
+          hallId: seat.hallId,
+          locked: false,
+          conflictFlags: [],
+        };
+        candidateAllocations.push(alloc);
+      }
     }
-
-    const alloc = {
-      hallSeatId: seat.id,
-      studentId: student.studentId,
-      studentName: student.studentName,
-      rollNumber: student.rollNumber,
-      enrollmentNumber: student.enrollmentNumber || '',
-      departmentId: student.departmentId,
-      deptCode: student.deptCode || 'GEN',
-      year: student.year || 1,
-      semester: student.semester || 1,
-      sectionId: student.sectionId,
-      sectionCode: student.sectionCode || 'A',
-      subjectId: student.subjectId,
-      subjectCode: student.subjectCode || 'SUBJ',
-      subjectName: student.subjectName || '',
-      examSubjectId: student.examSubjectId,
-      rowNumber: seat.rowNumber,
-      columnNumber: seat.columnNumber,
-      seatNumber: seat.seatNumber,
-      hallId: seat.hallId,
-      locked: false,
-      conflictFlags: [],
-    };
-
-    candidateAllocations.push(alloc);
-    seatMap.set(seat.id, alloc);
-    studentMap.set(student.studentId, alloc);
   }
 
-  // Combine with locked allocations
+  // Remaining students could not be seated due to capacity or bench mixing constraints
+  unallocatedStudents.push(...remainingStudents);
+
   const allAllocations = [...lockedAllocations.map(l => ({ ...l, locked: true })), ...candidateAllocations];
 
-  // STEP 4 & 5: Score adjacency conflicts & build spatial lookup
+  // Spatial neighbor lookup for swap optimization
   const positionMap = new Map();
-  for (const seat of seats) {
+  for (const seat of normalizedSeats) {
     positionMap.set(`${seat.hallId}-${seat.rowNumber}-${seat.columnNumber}`, seat);
   }
   const allocSeatMap = new Map(allAllocations.map(a => [a.hallSeatId, a]));
 
-  // Helper to get neighbors (up, down, left, right, diagonals)
   const getNeighborAllocations = (alloc) => {
-    const seat = seats.find(s => s.id === alloc.hallSeatId);
+    const seat = normalizedSeats.find(s => s.id === alloc.hallSeatId);
     if (!seat) return [];
-
     const neighbors = [];
-    const deltas = [
-      [-1, 0], [1, 0], [0, -1], [0, 1], // Orthogonal
-      [-1, -1], [-1, 1], [1, -1], [1, 1] // Diagonal
-    ];
-
+    const deltas = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]];
     for (const [dr, dc] of deltas) {
       const neighborSeat = positionMap.get(`${seat.hallId}-${seat.rowNumber + dr}-${seat.columnNumber + dc}`);
       if (neighborSeat && allocSeatMap.has(neighborSeat.id)) {
-        neighbors.push({ alloc: allocSeatMap.get(neighborSeat.id), dr, dc });
+        neighbors.push({ alloc: allocSeatMap.get(neighborSeat.id) });
       }
     }
     return neighbors;
   };
 
-  // STEP 6: Improvement / Swap pass to eliminate adjacencies
-  let maxSwapPasses = 300;
+  // Swap optimization (enforcing bench constraints on swap)
   let swapsMade = 0;
-  for (let pass = 0; pass < maxSwapPasses; pass++) {
+  for (let pass = 0; pass < 200; pass++) {
     let swapped = false;
     for (let i = 0; i < candidateAllocations.length; i++) {
       for (let j = i + 1; j < candidateAllocations.length; j++) {
@@ -244,64 +265,31 @@ export function generateSeating({ registrations = [], seats = [], lockedAllocati
         const allocB = candidateAllocations[j];
 
         if (allocA.locked || allocB.locked) continue;
-        if (allocA.subjectId === allocB.subjectId && allocA.departmentId === allocB.departmentId) continue;
+        if (allocA.benchNumber === allocB.benchNumber && allocA.hallId === allocB.hallId) continue;
 
-        // Current score contribution of A and B
+        // Check if swapping violates bench constraints on A's bench or B's bench
+        const benchAOthers = candidateAllocations.filter(a => a.hallId === allocA.hallId && a.benchNumber === allocA.benchNumber && a.hallSeatId !== allocA.hallSeatId);
+        const benchBOthers = candidateAllocations.filter(a => a.hallId === allocB.hallId && a.benchNumber === allocB.benchNumber && a.hallSeatId !== allocB.hallSeatId);
+
+        if (!benchAOthers.every(occ => canShareBench(allocB, occ))) continue;
+        if (!benchBOthers.every(occ => canShareBench(allocA, occ))) continue;
+
         const neighborsA = getNeighborAllocations(allocA);
         const neighborsB = getNeighborAllocations(allocB);
 
-        const currentScoreA = neighborsA.reduce((sum, n) => sum + scoreNeighborPair(allocA, n.alloc, w), 0);
-        const currentScoreB = neighborsB.reduce((sum, n) => sum + scoreNeighborPair(allocB, n.alloc, w), 0);
-        const totalBefore = currentScoreA + currentScoreB;
+        const currentScore = neighborsA.reduce((sum, n) => sum + scoreNeighborPair(allocA, n.alloc, w), 0) +
+                             neighborsB.reduce((sum, n) => sum + scoreNeighborPair(allocB, n.alloc, w), 0);
 
-        // Score if swapped
-        const swappedScoreA = neighborsA.reduce((sum, n) => sum + scoreNeighborPair(allocB, n.alloc, w), 0);
-        const swappedScoreB = neighborsB.reduce((sum, n) => sum + scoreNeighborPair(allocA, n.alloc, w), 0);
-        const totalAfter = swappedScoreA + swappedScoreB;
+        const swappedScore = neighborsA.reduce((sum, n) => sum + scoreNeighborPair(allocB, n.alloc, w), 0) +
+                             neighborsB.reduce((sum, n) => sum + scoreNeighborPair(allocA, n.alloc, w), 0);
 
-        if (totalAfter > totalBefore) {
-          // Perform swap in student mapping
-          const tempStudentId = allocA.studentId;
-          const tempName = allocA.studentName;
-          const tempRoll = allocA.rollNumber;
-          const tempEnr = allocA.enrollmentNumber;
-          const tempDeptId = allocA.departmentId;
-          const tempDeptCode = allocA.deptCode;
-          const tempYear = allocA.year;
-          const tempSem = allocA.semester;
-          const tempSecId = allocA.sectionId;
-          const tempSecCode = allocA.sectionCode;
-          const tempSubjId = allocA.subjectId;
-          const tempSubjCode = allocA.subjectCode;
-          const tempSubjName = allocA.subjectName;
-
-          allocA.studentId = allocB.studentId;
-          allocA.studentName = allocB.studentName;
-          allocA.rollNumber = allocB.rollNumber;
-          allocA.enrollmentNumber = allocB.enrollmentNumber;
-          allocA.departmentId = allocB.departmentId;
-          allocA.deptCode = allocB.deptCode;
-          allocA.year = allocB.year;
-          allocA.semester = allocB.semester;
-          allocA.sectionId = allocB.sectionId;
-          allocA.sectionCode = allocB.sectionCode;
-          allocA.subjectId = allocB.subjectId;
-          allocA.subjectCode = allocB.subjectCode;
-          allocA.subjectName = allocB.subjectName;
-
-          allocB.studentId = tempStudentId;
-          allocB.studentName = tempName;
-          allocB.rollNumber = tempRoll;
-          allocB.enrollmentNumber = tempEnr;
-          allocB.departmentId = tempDeptId;
-          allocB.deptCode = tempDeptCode;
-          allocB.year = tempYear;
-          allocB.semester = tempSem;
-          allocB.sectionId = tempSecId;
-          allocB.sectionCode = tempSecCode;
-          allocB.subjectId = tempSubjId;
-          allocB.subjectCode = tempSubjCode;
-          allocB.subjectName = tempSubjName;
+        if (swappedScore > currentScore) {
+          // Perform swap
+          const tempKeys = ['studentId', 'studentName', 'rollNumber', 'enrollmentNumber', 'departmentId', 'deptCode', 'year', 'semester', 'sectionId', 'sectionCode', 'subjectId', 'subjectCode', 'subjectName', 'examSubjectId'];
+          const tempA = {};
+          tempKeys.forEach(k => { tempA[k] = allocA[k]; });
+          tempKeys.forEach(k => { allocA[k] = allocB[k]; });
+          tempKeys.forEach(k => { allocB[k] = tempA[k]; });
 
           swapped = true;
           swapsMade++;
@@ -313,10 +301,10 @@ export function generateSeating({ registrations = [], seats = [], lockedAllocati
     if (!swapped) break;
   }
 
-  // STEP 7: Validate final arrangement
+  // Validate final arrangement
   const validation = validateSeating({
     allocations: allAllocations,
-    seats,
+    seats: normalizedSeats,
     registrations: activeRegs,
     weights: w,
   });
@@ -335,15 +323,7 @@ export function generateSeating({ registrations = [], seats = [], lockedAllocati
 }
 
 /**
- * Standalone Seating Validator.
- * MUST validate an existing allocation against actual hall seats.
- * Does NOT call generator with empty seats!
- *
- * @param {object} params
- * @param {Array} params.allocations - Allocations to validate
- * @param {Array} params.seats - Actual hall seats
- * @param {Array} params.registrations - Registered students
- * @param {object} [params.weights] - Weights override
+ * Standalone Seating Validator with Explicit Bench Rule Detection.
  */
 export function validateSeating({ allocations = [], seats = [], registrations = [], weights = {} }) {
   const w = { ...DEFAULT_WEIGHTS, ...weights };
@@ -354,7 +334,12 @@ export function validateSeating({ allocations = [], seats = [], registrations = 
   const seenSeats = new Map();
   const seatByPos = new Map();
 
-  for (const seat of seats) {
+  const normalizedSeats = seats.map(s => ({
+    ...s,
+    benchNumber: s.benchNumber || s.bench_number || Math.ceil((s.columnNumber || 1) / (s.seatsPerBench || 2)),
+  }));
+
+  for (const seat of normalizedSeats) {
     seatByPos.set(`${seat.hallId}-${seat.rowNumber}-${seat.columnNumber}`, seat);
   }
 
@@ -371,10 +356,8 @@ export function validateSeating({ allocations = [], seats = [], registrations = 
         studentId: alloc.studentId,
         seatNumber: alloc.seatNumber,
       });
-      if (!alloc.conflictFlags?.includes('duplicate_student')) {
-        alloc.conflictFlags = alloc.conflictFlags || [];
-        alloc.conflictFlags.push('duplicate_student');
-      }
+      alloc.conflictFlags = alloc.conflictFlags || [];
+      if (!alloc.conflictFlags.includes('duplicate_student')) alloc.conflictFlags.push('duplicate_student');
     } else {
       seenStudents.set(alloc.studentId, alloc);
     }
@@ -385,15 +368,13 @@ export function validateSeating({ allocations = [], seats = [], registrations = 
         message: `Seat ${alloc.seatNumber} occupied by multiple students.`,
         hallSeatId: alloc.hallSeatId,
       });
-      if (!alloc.conflictFlags?.includes('duplicate_seat')) {
-        alloc.conflictFlags = alloc.conflictFlags || [];
-        alloc.conflictFlags.push('duplicate_seat');
-      }
+      alloc.conflictFlags = alloc.conflictFlags || [];
+      if (!alloc.conflictFlags.includes('duplicate_seat')) alloc.conflictFlags.push('duplicate_seat');
     } else {
       seenSeats.set(alloc.hallSeatId, alloc);
     }
 
-    const actualSeat = seats.find(s => s.id === alloc.hallSeatId);
+    const actualSeat = normalizedSeats.find(s => s.id === alloc.hallSeatId);
     if (actualSeat && actualSeat.available === false) {
       conflicts.push({
         type: 'UNAVAILABLE_SEAT',
@@ -403,14 +384,88 @@ export function validateSeating({ allocations = [], seats = [], registrations = 
     }
   }
 
-  // 2. Check Adjacencies (Orthogonal + Diagonal)
+  // 2. EXPLICIT BENCH-LEVEL CONSTRAINT VALIDATION
+  const benchAllocMap = new Map();
+  for (const alloc of allocations) {
+    const seat = normalizedSeats.find(s => s.id === alloc.hallSeatId);
+    const benchNum = alloc.benchNumber || seat?.benchNumber || seat?.bench_number;
+    const hallId = alloc.hallId || seat?.hallId || 'H1';
+    const key = `${hallId}-${benchNum}`;
+    if (!benchAllocMap.has(key)) benchAllocMap.set(key, []);
+    benchAllocMap.get(key).push({ alloc, seat });
+  }
+
+  for (const [benchKey, occupants] of benchAllocMap.entries()) {
+    if (occupants.length > 1) {
+      for (let i = 0; i < occupants.length; i++) {
+        for (let j = i + 1; j < occupants.length; j++) {
+          const a = occupants[i].alloc;
+          const b = occupants[j].alloc;
+
+          // Check Bench Rule 1: Different Subject
+          const sameSubj = (a.subjectId && b.subjectId && a.subjectId === b.subjectId) ||
+                           (a.examSubjectId && b.examSubjectId && a.examSubjectId === b.examSubjectId) ||
+                           (a.subjectCode && b.subjectCode && a.subjectCode === b.subjectCode);
+          if (sameSubj) {
+            conflicts.push({
+              type: 'SAME_BENCH_SAME_SUBJECT',
+              message: `Bench ${a.benchNumber || benchKey} (Seats ${a.seatNumber}, ${b.seatNumber}): Both students take the same subject (${a.subjectCode}).`,
+              seat1: a.seatNumber,
+              seat2: b.seatNumber,
+              benchKey,
+              subjectCode: a.subjectCode,
+            });
+            a.conflictFlags = a.conflictFlags || [];
+            b.conflictFlags = b.conflictFlags || [];
+            if (!a.conflictFlags.includes('same_bench_same_subject')) a.conflictFlags.push('same_bench_same_subject');
+            if (!b.conflictFlags.includes('same_bench_same_subject')) b.conflictFlags.push('same_bench_same_subject');
+          }
+
+          // Check Bench Rule 2: Different Year
+          if (a.year && b.year && Number(a.year) === Number(b.year)) {
+            conflicts.push({
+              type: 'SAME_BENCH_SAME_YEAR',
+              message: `Bench ${a.benchNumber || benchKey} (Seats ${a.seatNumber}, ${b.seatNumber}): Both students are in Year ${a.year}.`,
+              seat1: a.seatNumber,
+              seat2: b.seatNumber,
+              benchKey,
+              year: a.year,
+            });
+            a.conflictFlags = a.conflictFlags || [];
+            b.conflictFlags = b.conflictFlags || [];
+            if (!a.conflictFlags.includes('same_bench_same_year')) a.conflictFlags.push('same_bench_same_year');
+            if (!b.conflictFlags.includes('same_bench_same_year')) b.conflictFlags.push('same_bench_same_year');
+          }
+
+          // Check Bench Rule 3: Different Class / Section
+          const sameSec = (a.sectionId && b.sectionId && a.sectionId === b.sectionId) ||
+                          (a.departmentId === b.departmentId && a.year === b.year && a.sectionCode === b.sectionCode);
+          if (sameSec) {
+            conflicts.push({
+              type: 'SAME_BENCH_SAME_SECTION',
+              message: `Bench ${a.benchNumber || benchKey} (Seats ${a.seatNumber}, ${b.seatNumber}): Both students belong to the same section/class (${a.sectionCode || a.deptCode}).`,
+              seat1: a.seatNumber,
+              seat2: b.seatNumber,
+              benchKey,
+              sectionCode: a.sectionCode,
+            });
+            a.conflictFlags = a.conflictFlags || [];
+            b.conflictFlags = b.conflictFlags || [];
+            if (!a.conflictFlags.includes('same_bench_same_section')) a.conflictFlags.push('same_bench_same_section');
+            if (!b.conflictFlags.includes('same_bench_same_section')) b.conflictFlags.push('same_bench_same_section');
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Check General Adjacencies (Orthogonal + Diagonal)
   const allocSeatMap = new Map(allocations.map(a => [a.hallSeatId, a]));
 
   for (const alloc of allocations) {
-    const seat = seats.find(s => s.id === alloc.hallSeatId);
+    const seat = normalizedSeats.find(s => s.id === alloc.hallSeatId);
     if (!seat) continue;
 
-    // Check right, down, diagonal right-down, diagonal left-down (avoid double counting)
     const deltas = [[0, 1], [1, 0], [1, 1], [1, -1]];
     for (const [dr, dc] of deltas) {
       const neighborSeat = seatByPos.get(`${seat.hallId}-${seat.rowNumber + dr}-${seat.columnNumber + dc}`);
@@ -422,57 +477,36 @@ export function validateSeating({ allocations = [], seats = [], registrations = 
       const pairScore = scoreNeighborPair(alloc, neighborAlloc, w);
       totalScore += pairScore;
 
-      // Check Same Subject
       if (alloc.subjectId && neighborAlloc.subjectId && alloc.subjectId === neighborAlloc.subjectId) {
         sameSubjectCount++;
-        conflicts.push({
-          type: 'SAME_SUBJECT_ADJACENT',
-          message: `Same subject (${alloc.subjectCode}) adjacent at ${alloc.seatNumber} and ${neighborAlloc.seatNumber}.`,
-          seat1: alloc.seatNumber,
-          seat2: neighborAlloc.seatNumber,
-          subjectCode: alloc.subjectCode,
-        });
-        if (!alloc.conflictFlags?.includes('same_subject_adjacent')) {
-          alloc.conflictFlags = alloc.conflictFlags || [];
-          alloc.conflictFlags.push('same_subject_adjacent');
-        }
-        if (!neighborAlloc.conflictFlags?.includes('same_subject_adjacent')) {
-          neighborAlloc.conflictFlags = neighborAlloc.conflictFlags || [];
-          neighborAlloc.conflictFlags.push('same_subject_adjacent');
-        }
       }
 
-      // Check Same Class
       const sameClass = alloc.departmentId === neighborAlloc.departmentId &&
                         alloc.year === neighborAlloc.year &&
                         alloc.semester === neighborAlloc.semester;
       if (sameClass) {
         sameClassCount++;
-        if (!alloc.subjectId || alloc.subjectId !== neighborAlloc.subjectId) {
-          warnings.push({
-            type: 'SAME_CLASS_ADJACENT',
-            message: `Same class adjacent at ${alloc.seatNumber} and ${neighborAlloc.seatNumber}.`,
-          });
-        }
       }
     }
   }
 
-  // 3. Check unallocated students
+  // 4. Check unallocated students & capacity limits
   const activeRegs = registrations.filter(r => r.status !== 'absent' && r.status !== 'cancelled');
   const allocatedIds = new Set(allocations.map(a => a.studentId));
   const unallocatedStudents = activeRegs.filter(r => !allocatedIds.has(r.studentId));
 
   if (unallocatedStudents.length > 0) {
-    warnings.push({
+    conflicts.push({
       type: 'UNALLOCATED_STUDENTS',
-      message: `${unallocatedStudents.length} registered students could not be seated due to capacity limits.`,
+      message: `${unallocatedStudents.length} student(s) could not be seated due to hall capacity or bench mixing constraints.`,
       count: unallocatedStudents.length,
     });
   }
 
+  const isOk = conflicts.length === 0;
+
   return {
-    ok: conflicts.length === 0,
+    ok: isOk,
     score: totalScore,
     conflicts,
     warnings,
@@ -484,6 +518,6 @@ export function validateSeating({ allocations = [], seats = [], registrations = 
     duplicateStudentCount: conflicts.filter(c => c.type === 'DUPLICATE_STUDENT').length,
     duplicateSeatCount: conflicts.filter(c => c.type === 'DUPLICATE_SEAT').length,
     capacityUsed: allocations.length,
-    capacityAvailable: seats.length,
+    capacityAvailable: normalizedSeats.length,
   };
 }

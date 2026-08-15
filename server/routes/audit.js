@@ -21,16 +21,16 @@ router.get('/', async (req, res, next) => {
     const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10)));
     const offset = (pageNum - 1) * limitNum;
 
-    const conds = [];
-    const params = [];
-    let idx = 1;
+    const conds = ['u.institution_id = $1'];
+    const params = [req.user.institution_id];
+    let idx = 2;
     if (module) { conds.push(`al.module = $${idx++}`); params.push(module); }
     if (action) { conds.push(`al.action = $${idx++}`); params.push(action); }
     if (userId) { conds.push(`al.user_id = $${idx++}`); params.push(userId); }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
 
     const countRes = await pool.query(
-      `SELECT COUNT(*)::int FROM audit_logs al ${where}`, params,
+      `SELECT COUNT(*)::int FROM audit_logs al LEFT JOIN users u ON u.id = al.user_id ${where}`, params,
     );
     const result = await pool.query(
       `SELECT al.*, u.email AS user_email, u.full_name AS user_name

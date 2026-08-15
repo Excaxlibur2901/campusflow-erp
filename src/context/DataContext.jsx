@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 
 const DataContext = createContext(null);
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:4000';
 
 export function DataProvider({ children, getAccessToken }) {
   const [toasts, setToasts] = useState([]);
@@ -17,6 +16,7 @@ export function DataProvider({ children, getAccessToken }) {
   const [examsList, setExamsList] = useState([]);
   const [notificationsList, setNotificationsList] = useState([]);
   const [attendanceHistory, setAttendanceHistory] = useState([]);
+  const [timetableSlots, setTimetableSlots] = useState([]);
   
   // Settings & Theme UI preferences stored safely in localStorage
   const [settings, setSettingsState] = useState(() => {
@@ -57,32 +57,41 @@ export function DataProvider({ children, getAccessToken }) {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
-  const accessTokenRef = useRef(null);
-
-  useEffect(() => {
-    accessTokenRef.current = getAccessToken?.() ?? null;
-  }, [getAccessToken]);
+  const currentToken = getAccessToken?.() ?? null;
 
   useEffect(() => {
     let active = true;
-    const token = accessTokenRef.current;
     
     // Only load data if we have a token (user is authenticated)
-    if (!token) return;
+    if (!currentToken) {
+      // Clear data when unauthenticated
+      setDepartments([]);
+      setFacultyList([]);
+      setStudentsList([]);
+      setClassroomsList([]);
+      setSubjectsList([]);
+      setExamsList([]);
+      setTimetableSlots([]);
+      return;
+    }
 
     setDataLoading(true);
 
-    const headers = { Authorization: `Bearer ${token}` };
+    const headers = { Authorization: `Bearer ${currentToken}` };
 
     Promise.all([
-      fetch(`${API_BASE}/api/departments`, { headers }).then(r => r.ok ? r.json() : []),
-      fetch(`${API_BASE}/api/faculty`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
-      fetch(`${API_BASE}/api/students`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
-      fetch(`${API_BASE}/api/classrooms`, { headers }).then(r => r.ok ? r.json() : []),
-      fetch(`${API_BASE}/api/subjects`, { headers }).then(r => r.ok ? r.json() : []),
-      fetch(`${API_BASE}/api/exams`, { headers }).then(r => r.ok ? r.json() : [])
+      fetch(`/api/departments`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`/api/faculty`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
+      fetch(`/api/students`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
+      fetch(`/api/classrooms`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`/api/subjects`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`/api/exams`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`/api/institutions`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`/api/attendance/sessions`, { headers }).then(r => r.ok ? r.json() : []),
+      fetch(`/api/audit?limit=20`, { headers }).then(r => r.ok ? r.json() : { data: [] }).then(r => r.data || []),
+      fetch(`/api/timetable`, { headers }).then(r => r.ok ? r.json() : [])
     ])
-      .then(([deps, facs, studs, rooms, subs, exms]) => {
+      .then(([deps, facs, studs, rooms, subs, exms, insts, atts, audts, ttbs]) => {
         if (!active) return;
         setDepartments(deps);
         setFacultyList(facs);
@@ -90,6 +99,52 @@ export function DataProvider({ children, getAccessToken }) {
         setClassroomsList(rooms);
         setSubjectsList(subs);
         setExamsList(exms);
+        
+        // Populate institutions settings dynamically
+        if (insts && insts.length > 0) {
+          setSettings(prev => ({
+            ...prev,
+            institutionName: insts[0].name || prev.institutionName,
+            address: insts[0].address || prev.address,
+            phone: insts[0].phone || prev.phone,
+            email: insts[0].email || prev.email,
+            website: insts[0].website || prev.website,
+            affiliation: insts[0].affiliation || prev.affiliation,
+            naacGrade: insts[0].naac_grade || prev.naacGrade,
+            aisheCode: insts[0].aishe_code || prev.aisheCode,
+            autonomousStatus: insts[0].autonomous_status || prev.autonomousStatus,
+            principalName: insts[0].principal_name || prev.principalName,
+          }));
+        }
+
+        // Map attendance sessions to Dashboard format
+        const history = (atts || []).map(a => ({
+          id: a.id,
+          date: a.session_date,
+          subject: a.subject_offering_id, // Best effort without API change
+          total: a.record_count || 0,
+          present: a.present_count || 0
+        }));
+        setAttendanceHistory(history);
+
+        // Map audit logs to notifications/recent activity
+        const notifications = (audts || []).map(a => ({
+          id: a.id,
+          type: a.module,
+          title: `${a.action} ${a.entity}`,
+          time: new Date(a.created_at).toLocaleString(),
+          read: true
+        }));
+        setNotificationsList(notifications);
+
+        // Map timetable
+        // Backend doesn't return 'time', so we map 'slotIdx' or just leave it empty.
+        // Dashboard uses 'l.time'. We'll populate 'time' with a generic label if missing.
+        const timetable = (ttbs || []).map(t => ({
+          ...t,
+          time: t.time_slot_label || `Slot ${t.slotIdx}`,
+        }));
+        setTimetableSlots(timetable);
         setDataError('');
       })
       .catch(error => {
@@ -100,7 +155,7 @@ export function DataProvider({ children, getAccessToken }) {
       });
 
     return () => { active = false; };
-  }, [getAccessToken]);
+  }, [currentToken]);
 
   const value = {
     dataLoading,
@@ -117,7 +172,7 @@ export function DataProvider({ children, getAccessToken }) {
     examsList,
     notificationsList,
     attendanceHistory,
-    timetableSlots: [],
+    timetableSlots,
     seatAllocations: []
   };
 

@@ -13,6 +13,17 @@ import { generateSeating, validateSeating } from '../engine/seating.js';
 const router = Router();
 router.use(authenticateUser);
 
+async function verifyExamInstitution(req, res, next, val) {
+  try {
+    const examCheck = await pool.query('SELECT id FROM exams WHERE id = $1 AND institution_id = $2', [val, req.user.institution_id]);
+    if (examCheck.rowCount === 0) return res.status(404).json({ error: 'Exam not found.' });
+    next();
+  } catch (err) { next(err); }
+}
+
+router.param('id', verifyExamInstitution);
+router.param('examId', verifyExamInstitution);
+
 /* ─────────────── EXAMS ─────────────────────────────────────────── */
 
 router.get('/', async (req, res, next) => {
@@ -134,6 +145,12 @@ router.post('/:examId/subjects', requireRole('SUPER_ADMIN', 'EXAM_CELL'), async 
     if (!examDate)  return res.status(400).json({ error: 'Exam date is required.' });
     if (!session)   return res.status(400).json({ error: 'Session is required.' });
 
+    const subCheck = await pool.query(`
+      SELECT 1 FROM subjects s JOIN departments d ON d.id = s.department_id 
+      WHERE s.id = $1 AND d.institution_id = $2
+    `, [subjectId, req.user.institution_id]);
+    if (subCheck.rowCount === 0) return res.status(403).json({ error: 'Unauthorized or invalid subject.' });
+
     const result = await pool.query(
       `INSERT INTO exam_subjects (exam_id, subject_id, exam_date, session, starts_at, ends_at)
        VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
@@ -171,6 +188,9 @@ router.post('/:examId/halls', requireRole('SUPER_ADMIN', 'EXAM_CELL'), async (re
     const { classroomId, rowsCount = 8, columnsCount = 10, benchesCount = 40, seatsPerBench = 2, unavailableSeats = [] } = req.body;
     const examId = req.params.examId;
     if (!classroomId) return res.status(400).json({ error: 'classroomId is required.' });
+
+    const classCheck = await pool.query(`SELECT 1 FROM classrooms WHERE id = $1 AND institution_id = $2`, [classroomId, req.user.institution_id]);
+    if (classCheck.rowCount === 0) return res.status(403).json({ error: 'Unauthorized or invalid classroom.' });
 
     const capacity = rowsCount * columnsCount;
 
@@ -249,16 +269,29 @@ router.post('/:examId/registrations', requireRole('SUPER_ADMIN', 'EXAM_CELL', 'H
     const { examSubjectId, studentIds, departmentId } = req.body;
     if (!examSubjectId) return res.status(400).json({ error: 'examSubjectId is required.' });
 
+    const esCheck = await pool.query(`SELECT 1 FROM exam_subjects WHERE id = $1 AND exam_id = $2`, [examSubjectId, req.params.examId]);
+    if (esCheck.rowCount === 0) return res.status(404).json({ error: 'Exam subject not found in this exam.' });
+
+    if (departmentId) {
+      const deptCheck = await pool.query(`SELECT 1 FROM departments WHERE id = $1 AND institution_id = $2`, [departmentId, req.user.institution_id]);
+      if (deptCheck.rowCount === 0) return res.status(403).json({ error: 'Unauthorized department.' });
+    }
+
     let idsToRegister = studentIds;
 
     // If departmentId provided without studentIds, auto-fetch department students
     if ((!idsToRegister || !idsToRegister.length) && departmentId) {
-      const stuRes = await pool.query(`SELECT id FROM students WHERE department_id = $1 AND status = 'ACTIVE'`, [departmentId]);
+      const stuRes = await pool.query(`SELECT id FROM students WHERE department_id = $1 AND status = 'ACTIVE' AND institution_id = $2`, [departmentId, req.user.institution_id]);
       idsToRegister = stuRes.rows.map(r => r.id);
     }
 
     if (!Array.isArray(idsToRegister) || !idsToRegister.length) {
       return res.status(400).json({ error: 'No student records found to register.' });
+    }
+
+    const stuCheck = await pool.query(`SELECT id FROM students WHERE id = ANY($1::uuid[]) AND institution_id = $2`, [idsToRegister, req.user.institution_id]);
+    if (stuCheck.rowCount !== idsToRegister.length) {
+      return res.status(403).json({ error: 'One or more students do not belong to your institution.' });
     }
 
     const client = await pool.connect();
@@ -296,8 +329,12 @@ router.put('/:examId/registrations/:regId/absent', requireRole('SUPER_ADMIN', 'E
     const newStatus = absent ? 'absent' : 'registered';
 
     const result = await pool.query(
-      `UPDATE exam_registrations SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
-      [newStatus, req.params.regId],
+      `UPDATE exam_registrations er
+       SET status = $1, updated_at = now()
+       FROM exam_subjects es
+       WHERE er.id = $2 AND er.exam_subject_id = es.id AND es.exam_id = $3
+       RETURNING er.*`,
+      [newStatus, req.params.regId, req.params.examId],
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Exam registration not found.' });
 
@@ -418,38 +455,41 @@ router.post('/:examId/seating/generate', requireRole('SUPER_ADMIN', 'EXAM_CELL')
       weights,
     });
 
-    // Save allocations into PostgreSQL
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    // Save allocations into PostgreSQL only if valid and without conflicts
+    if (result.report.ok && result.allocations.length > 0 && (!result.conflicts || result.conflicts.length === 0)) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
 
-      // Delete existing unlocked allocations
-      await client.query(`DELETE FROM seat_allocations WHERE exam_id = $1 AND locked = false`, [examId]);
+        // Delete existing unlocked allocations
+        await client.query(`DELETE FROM seat_allocations WHERE exam_id = $1 AND locked = false`, [examId]);
 
-      for (const alloc of result.allocations) {
-        const reg = regResult.rows.find(r => r.student_id === alloc.studentId);
-        await client.query(
-          `INSERT INTO seat_allocations
-             (exam_id, exam_subject_id, exam_registration_id, student_id, hall_seat_id,
-              allocation_status, score, conflict_flags, locked, created_by, updated_by)
-           VALUES ($1, $2, $3, $4, $5, 'allocated', $6, $7::jsonb, false, $8, $8)`,
-          [
-            examId, alloc.examSubjectId || reg?.exam_subject_id, reg?.registration_id,
-            alloc.studentId, alloc.hallSeatId, alloc.score || 0,
-            JSON.stringify(alloc.conflictFlags || []), req.user.id
-          ],
-        );
+        for (const alloc of result.allocations) {
+          const reg = regResult.rows.find(r => r.student_id === alloc.studentId);
+          await client.query(
+            `INSERT INTO seat_allocations
+               (exam_id, exam_subject_id, exam_registration_id, student_id, hall_seat_id,
+                allocation_status, score, conflict_flags, locked, created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, 'allocated', $6, $7::jsonb, false, $8, $8)`,
+            [
+              examId, alloc.examSubjectId || reg?.exam_subject_id, reg?.registration_id,
+              alloc.studentId, alloc.hallSeatId, alloc.score || 0,
+              JSON.stringify(alloc.conflictFlags || []), req.user.id
+            ],
+          );
+        }
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
-
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
+      return res.json(result);
+    } else {
+      return res.status(409).json(result);
     }
-
-    return res.json(result);
   } catch (err) { next(err); }
 });
 

@@ -171,10 +171,10 @@ export function AuthProvider({ children }) {
   }, []);
 
   /* ── First-run setup (called from SetupWizard) ──────────────────── */
-  const runSetup = useCallback(async ({ institutionName, adminName, adminEmail, adminPassword }) => {
+  const runSetup = useCallback(async ({ institutionName, adminName, adminEmail, adminPassword, instDetails, departments, classrooms }) => {
     const { ok, data } = await apiFetch('/auth/setup', {
       method: 'POST',
-      body: JSON.stringify({ institutionName, adminName, adminEmail, adminPassword }),
+      body: JSON.stringify({ institutionName, adminName, adminEmail, adminPassword, instDetails, departments, classrooms }),
     });
     if (!ok) return { success: false, error: data.error ?? 'Setup failed.' };
 

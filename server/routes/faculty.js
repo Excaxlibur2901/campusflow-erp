@@ -43,7 +43,6 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-  try {
     const { employeeCode, fullName, email, phone, departmentId, specialization, maxWeeklyHours } = req.body;
     if (!employeeCode?.trim()) return res.status(400).json({ error: 'Employee code is required.' });
     if (!fullName?.trim())     return res.status(400).json({ error: 'Full name is required.' });
@@ -64,7 +63,7 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res
 
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query('SELECT * FROM faculty WHERE id = $1', [req.params.id]);
+    const before = await pool.query('SELECT * FROM faculty WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Faculty not found.' });
     const { fullName, email, phone, departmentId, specialization, maxWeeklyHours, active } = req.body;
     const result = await pool.query(

@@ -1,6 +1,6 @@
 /**
  * Timetable API — CampusFlow ERP
- * Fully integrated with normalized PostgreSQL tables.
+ * Fully integrated with normalized PostgreSQL tables and tenant isolation.
  */
 
 import { Router } from 'express';
@@ -17,9 +17,9 @@ router.get('/', async (req, res, next) => {
   try {
     const { dept, semester, section } = req.query;
 
-    const conds = [];
-    const params = [];
-    let idx = 1;
+    const conds = ['d.institution_id = $1'];
+    const params = [req.user.institution_id];
+    let idx = 2;
 
     if (dept) { conds.push(`d.code = $${idx++}`); params.push(dept); }
     if (semester) { conds.push(`sem.number = $${idx++}`); params.push(Number(semester)); }
@@ -83,36 +83,38 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       sectionCode = 'A',
       days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
       timeSlots = ['9:00-9:50', '9:50-10:40', '10:40-11:30', '11:30-12:20', '1:10-2:00', '2:00-2:50', '2:50-3:40'],
+      subjects: inputSubjects,
     } = req.body;
 
-    // 1. Fetch PostgreSQL Subjects, Faculty, Classrooms for department/semester
+    // 1. Fetch PostgreSQL Subjects, Faculty, Classrooms for department/institution
     const [subRes, facRes, roomRes, secRes, existingRes] = await Promise.all([
       pool.query(
         `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours
          FROM subjects s
          JOIN departments d ON d.id = s.department_id
-         WHERE d.code = $1 AND s.active = true`,
-        [dept],
+         WHERE d.code = $1 AND d.institution_id = $2 AND s.active = true`,
+        [dept, req.user.institution_id],
       ),
       pool.query(
         `SELECT f.id, f.full_name AS name, f.employee_code, f.max_weekly_hours
          FROM faculty f
          LEFT JOIN departments d ON d.id = f.department_id
-         WHERE d.code = $1 AND f.active = true`,
-        [dept],
+         WHERE f.institution_id = $1 AND (d.code = $2 OR f.department_id IS NULL) AND f.active = true`,
+        [req.user.institution_id, dept],
       ),
       pool.query(
         `SELECT c.id, c.code, c.name, c.capacity, c.room_type
          FROM classrooms c
-         WHERE c.active = true`,
+         WHERE c.institution_id = $1 AND c.active = true`,
+        [req.user.institution_id],
       ),
       pool.query(
         `SELECT sec.id, sec.code, sec.capacity FROM sections sec
          JOIN semesters sem ON sem.id = sec.semester_id
          JOIN programs p ON p.id = sem.program_id
          JOIN departments d ON d.id = p.department_id
-         WHERE d.code = $1 AND sec.code = $2 LIMIT 1`,
-        [dept, sectionCode],
+         WHERE d.institution_id = $1 AND d.code = $2 AND sec.code = $3 LIMIT 1`,
+        [req.user.institution_id, dept, sectionCode],
       ),
       pool.query(
         `SELECT te.id, te.locked,
@@ -126,23 +128,34 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
          JOIN subjects s ON s.id = so.subject_id
          JOIN time_slots ts ON ts.id = te.time_slot_id
          JOIN sections sec ON sec.id = te.section_id
+         JOIN semesters sem ON sem.id = sec.semester_id
+         JOIN programs p ON p.id = sem.program_id
+         JOIN departments d ON d.id = p.department_id
          LEFT JOIN faculty f ON f.id = te.faculty_id
-         LEFT JOIN classrooms c ON c.id = te.classroom_id`,
+         LEFT JOIN classrooms c ON c.id = te.classroom_id
+         WHERE d.institution_id = $1`,
+        [req.user.institution_id],
       ),
     ]);
 
-    const subjects = subRes.rows.map((s, idx) => ({
-      id: s.id,
-      code: s.code,
-      name: s.name,
-      type: s.subject_type,
-      weeklyHours: Number(s.weekly_hours || 3),
-      credits: Number(s.credits || 3),
-      facultyId: facRes.rows[idx % (facRes.rows.length || 1)]?.id,
-      facultyName: facRes.rows[idx % (facRes.rows.length || 1)]?.name,
-      roomId: roomRes.rows[idx % (roomRes.rows.length || 1)]?.id,
-      roomCode: roomRes.rows[idx % (roomRes.rows.length || 1)]?.code,
-    }));
+    const subjectsToSchedule = (inputSubjects && Array.isArray(inputSubjects) && inputSubjects.length)
+      ? inputSubjects
+      : subRes.rows.map((s, idx) => {
+          const assignedFac = facRes.rows.find(f => f.id === s.faculty_id) || (facRes.rows.length ? facRes.rows[idx % facRes.rows.length] : null);
+          const assignedRoom = roomRes.rows.find(r => r.id === s.room_id) || null;
+          return {
+            id: s.id,
+            code: s.code,
+            name: s.name,
+            type: s.subject_type,
+            weeklyHours: Number(s.weekly_hours || s.credits || 3),
+            credits: Number(s.credits || 3),
+            facultyId: assignedFac?.id || null,
+            facultyName: assignedFac?.name || null,
+            roomId: assignedRoom?.id || null,
+            roomCode: assignedRoom?.code || null,
+          };
+        });
 
     const existingSlots = existingRes.rows.map(r => ({
       id: r.id,
@@ -161,7 +174,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
     const result = generateTimetable({
       days,
       timeSlots,
-      subjects,
+      subjects: subjectsToSchedule,
       facultyList: facRes.rows,
       classroomsList: roomRes.rows,
       existingSlots,
@@ -169,8 +182,8 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       sectionCapacity,
     });
 
-    // 3. Save generated slots into PostgreSQL in a transaction
-    if (result.slots.length > 0 && !result.hardConflicts.length) {
+    // 3. Save generated slots into PostgreSQL ONLY IF generation succeeded without hard conflicts
+    if (result.report.ok && result.slots.length > 0 && result.hardConflicts.length === 0) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -178,7 +191,13 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
         // Fetch or create section_id
         let sectionId = secRes.rows[0]?.id;
         if (!sectionId) {
-          const defaultSem = await client.query(`SELECT id FROM semesters LIMIT 1`);
+          const defaultSem = await client.query(`
+            SELECT sem.id FROM semesters sem
+            JOIN programs p ON p.id = sem.program_id
+            JOIN departments d ON d.id = p.department_id
+            WHERE d.institution_id = $1 LIMIT 1
+          `, [req.user.institution_id]);
+
           if (defaultSem.rowCount > 0) {
             const newSec = await client.query(
               `INSERT INTO sections (semester_id, code, capacity) VALUES ($1, $2, 60) RETURNING id`,
@@ -195,30 +214,32 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
           for (const slot of result.slots) {
             if (slot.locked) continue;
 
-            // Ensure time_slot record exists
             const tsLabel = `${slot.day}-${slot.slotIdx}`;
-            const tsRes = await client.query(
-              `INSERT INTO time_slots (label) VALUES ($1) ON CONFLICT (institution_id, label) DO UPDATE SET label = EXCLUDED.label RETURNING id`,
-              [tsLabel],
+            let tsRes = await client.query(
+              `SELECT id FROM time_slots WHERE institution_id = $1 AND label = $2 LIMIT 1`,
+              [req.user.institution_id, tsLabel]
             );
+            if (tsRes.rowCount === 0) {
+              tsRes = await client.query(
+                `INSERT INTO time_slots (institution_id, label, day_of_week, starts_at, ends_at)
+                 VALUES ($1, $2, 1, '09:00', '10:00') RETURNING id`,
+                [req.user.institution_id, tsLabel]
+              );
+            }
             const timeSlotId = tsRes.rows[0].id;
 
-            // Ensure subject_offering record exists
-            const soRes = await client.query(
-              `INSERT INTO subject_offerings (subject_id, semester_id, weekly_hours)
-               VALUES ($1, (SELECT semester_id FROM sections WHERE id = $2), 3)
-               ON CONFLICT DO NOTHING RETURNING id`,
-              [slot.subjectId, sectionId],
+            let soRes = await client.query(
+              `SELECT id FROM subject_offerings WHERE subject_id = $1 LIMIT 1`,
+              [slot.subjectId]
             );
-
-            let subjectOfferingId = soRes.rows[0]?.id;
-            if (!subjectOfferingId) {
-              const existingSo = await client.query(
-                `SELECT id FROM subject_offerings WHERE subject_id = $1 LIMIT 1`,
-                [slot.subjectId],
+            if (soRes.rowCount === 0) {
+              soRes = await client.query(
+                `INSERT INTO subject_offerings (subject_id, semester_id, weekly_hours)
+                 VALUES ($1, (SELECT semester_id FROM sections WHERE id = $2), 3) RETURNING id`,
+                [slot.subjectId, sectionId]
               );
-              subjectOfferingId = existingSo.rows[0]?.id;
             }
+            const subjectOfferingId = soRes.rows[0]?.id;
 
             if (subjectOfferingId && timeSlotId) {
               await client.query(
@@ -245,17 +266,20 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       } finally {
         client.release();
       }
+
+      await auditLog({
+        userId: req.user.id,
+        action: 'GENERATE',
+        module: 'Timetable',
+        entity: `Department ${dept} Section ${sectionCode}`,
+        after: { slots: result.slots.length, conflicts: result.hardConflicts.length, score: result.score },
+      });
+
+      return res.json(result);
+    } else {
+      // Generation failed or produced conflicts — return clear conflict report without persisting DB
+      return res.status(409).json(result);
     }
-
-    await auditLog({
-      userId: req.user.id,
-      action: 'GENERATE',
-      module: 'Timetable',
-      entity: `Department ${dept} Section ${sectionCode}`,
-      after: { slots: result.slots.length, conflicts: result.hardConflicts.length, score: result.score },
-    });
-
-    return res.json(result);
   } catch (err) { next(err); }
 });
 
@@ -275,10 +299,15 @@ router.post('/validate-move', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD', 'FA
          JOIN subjects s ON s.id = so.subject_id
          JOIN time_slots ts ON ts.id = te.time_slot_id
          JOIN sections sec ON sec.id = te.section_id
+         JOIN semesters sem ON sem.id = sec.semester_id
+         JOIN programs p ON p.id = sem.program_id
+         JOIN departments d ON d.id = p.department_id
          LEFT JOIN faculty f ON f.id = te.faculty_id
-         LEFT JOIN classrooms c ON c.id = te.classroom_id`,
+         LEFT JOIN classrooms c ON c.id = te.classroom_id
+         WHERE d.institution_id = $1`,
+        [req.user.institution_id],
       ),
-      pool.query(`SELECT id, code, capacity FROM classrooms`),
+      pool.query(`SELECT id, code, capacity, room_type FROM classrooms WHERE institution_id = $1`, [req.user.institution_id]),
     ]);
 
     const existingSlots = existingRes.rows.map(r => ({
@@ -308,8 +337,15 @@ router.put('/entries/:id/lock', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), 
   try {
     const { locked = true } = req.body;
     const result = await pool.query(
-      `UPDATE timetable_entries SET locked = $1, updated_at = now() WHERE id = $2 RETURNING *`,
-      [!!locked, req.params.id],
+      `UPDATE timetable_entries te
+       SET locked = $1, updated_at = now()
+       FROM sections sec
+       JOIN semesters sem ON sem.id = sec.semester_id
+       JOIN programs p ON p.id = sem.program_id
+       JOIN departments d ON d.id = p.department_id
+       WHERE te.id = $2 AND te.section_id = sec.id AND d.institution_id = $3
+       RETURNING te.*`,
+      [!!locked, req.params.id, req.user.institution_id],
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Timetable entry not found.' });
     return res.json(result.rows[0]);
@@ -319,7 +355,15 @@ router.put('/entries/:id/lock', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), 
 /* ── DELETE /api/timetable/entries/:id ─────────────────────────── */
 router.delete('/entries/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const before = await pool.query(`SELECT * FROM timetable_entries WHERE id = $1`, [req.params.id]);
+    const before = await pool.query(
+      `SELECT te.* FROM timetable_entries te
+       JOIN sections sec ON sec.id = te.section_id
+       JOIN semesters sem ON sem.id = sec.semester_id
+       JOIN programs p ON p.id = sem.program_id
+       JOIN departments d ON d.id = p.department_id
+       WHERE te.id = $1 AND d.institution_id = $2`,
+      [req.params.id, req.user.institution_id],
+    );
     if (before.rowCount === 0) return res.status(404).json({ error: 'Timetable entry not found.' });
     if (before.rows[0].locked) return res.status(400).json({ error: 'Cannot delete a locked timetable slot.' });
 

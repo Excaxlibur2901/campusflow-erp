@@ -251,8 +251,6 @@ router.post('/setup', async (req, res, next) => {
         [userId],
       );
 
-      await client.query('COMMIT');
-
       // Issue access token and set refresh cookie for immediate login
       const roles = ['SUPER_ADMIN'];
       const accessToken = signAccess(userId, roles);
@@ -262,15 +260,13 @@ router.post('/setup', async (req, res, next) => {
       const validIp = (cleanIp === '::1' || /^[0-9.:a-fA-F]+$/.test(cleanIp)) ? cleanIp : null;
       const ua = req.headers['user-agent'] ?? null;
 
-      try {
-        await pool.query(
-          `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
-           VALUES ($1, $2, $3, $4::inet, $5)`,
-          [userId, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
-        );
-      } catch (sessErr) {
-        console.warn('[auth] user_session setup insert warning:', sessErr.message);
-      }
+      await client.query(
+        `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+         VALUES ($1, $2, $3, $4::inet, $5)`,
+        [userId, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
+      );
+
+      await client.query('COMMIT');
 
       await auditLog({ userId, action: 'CREATE', module: 'Auth', entity: adminEmail.trim().toLowerCase(), ip: validIp, ua });
 
@@ -390,15 +386,11 @@ router.post('/login', async (req, res, next) => {
     const { token: refreshToken, hash: refreshHash } = signRefresh(user.id);
 
     // Store refresh token hash in DB
-    try {
-      await pool.query(
-        `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
-         VALUES ($1, $2, $3, $4::inet, $5)`,
-        [user.id, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
-      );
-    } catch (sessErr) {
-      console.warn('[auth] user_session login insert warning:', sessErr.message);
-    }
+    await pool.query(
+      `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+       VALUES ($1, $2, $3, $4::inet, $5)`,
+      [user.id, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
+    );
 
     await auditLog({ userId: user.id, action: 'LOGIN', module: 'Auth', entity: user.email, ip: validIp, ua });
 
@@ -643,15 +635,8 @@ router.post('/register', async (req, res, next) => {
       await client.query('BEGIN');
 
       if (accountType === 'institution') {
-        if (!institutionName?.trim()) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({ error: 'Institution name is required.' });
-        }
-        const instResult = await client.query(
-          `INSERT INTO institutions (name) VALUES ($1) RETURNING id`,
-          [institutionName.trim()],
-        );
-        targetInstitutionId = instResult.rows[0].id;
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: 'Public institution registration is disabled. Please contact the administrator.' });
       }
 
       // Hash password
@@ -673,7 +658,7 @@ router.post('/register', async (req, res, next) => {
 
       // Security rule: Public user registration creates STUDENT accounts ONLY.
       // Staff/Admin accounts (SUPER_ADMIN, PRINCIPAL, HOD, EXAM_CELL, FACULTY) must be created by an authorized admin.
-      const finalRoleCode = accountType === 'institution' ? 'SUPER_ADMIN' : 'STUDENT';
+      const finalRoleCode = 'STUDENT';
 
       // Ensure role exists in roles table
       await client.query(
@@ -698,8 +683,6 @@ router.post('/register', async (req, res, next) => {
         [userId, finalRoleCode, deptId],
       );
 
-      await client.query('COMMIT');
-
       // Issue access token and set refresh token cookie
       const roles = [finalRoleCode];
       const accessToken = signAccess(userId, roles);
@@ -710,15 +693,13 @@ router.post('/register', async (req, res, next) => {
       const validIp = (cleanIp === '::1' || /^[0-9.:a-fA-F]+$/.test(cleanIp)) ? cleanIp : null;
       const ua = req.headers['user-agent'] ?? null;
 
-      try {
-        await pool.query(
-          `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
-           VALUES ($1, $2, $3, $4::inet, $5)`,
-          [userId, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
-        );
-      } catch (sessErr) {
-        console.warn('[auth] user_session insert warning:', sessErr.message);
-      }
+      await client.query(
+        `INSERT INTO user_sessions (user_id, refresh_token_hash, user_agent, ip_address, expires_at)
+         VALUES ($1, $2, $3, $4::inet, $5)`,
+        [userId, refreshHash, ua, validIp, new Date(Date.now() + REFRESH_TTL_MS)],
+      );
+
+      await client.query('COMMIT');
 
       await auditLog({ userId, action: 'CREATE', module: 'Auth', entity: cleanEmail, ip: validIp, ua });
 

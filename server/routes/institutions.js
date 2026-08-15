@@ -16,10 +16,11 @@ import { auditLog } from '../utils/audit.js';
 const router = Router();
 router.use(authenticateUser);
 
-router.get('/', async (_req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM institutions ORDER BY name`,
+      `SELECT * FROM institutions WHERE id = $1 ORDER BY name`,
+      [req.user.institution_id]
     );
     return res.json(result.rows);
   } catch (err) { next(err); }
@@ -27,6 +28,7 @@ router.get('/', async (_req, res, next) => {
 
 router.get('/:id', async (req, res, next) => {
   try {
+    if (req.params.id !== req.user.institution_id) return res.status(404).json({ error: 'Institution not found.' });
     const result = await pool.query(
       `SELECT * FROM institutions WHERE id = $1`,
       [req.params.id],
@@ -70,6 +72,7 @@ router.post('/', requireRole('SUPER_ADMIN'), async (req, res, next) => {
 
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL'), async (req, res, next) => {
   try {
+    if (req.params.id !== req.user.institution_id) return res.status(404).json({ error: 'Institution not found.' });
     const before = await pool.query('SELECT * FROM institutions WHERE id = $1', [req.params.id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Institution not found.' });
 
@@ -109,6 +112,7 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL'), async (req, res, nex
 
 router.delete('/:id', requireRole('SUPER_ADMIN'), async (req, res, next) => {
   try {
+    if (req.params.id !== req.user.institution_id) return res.status(404).json({ error: 'Institution not found.' });
     const before = await pool.query('SELECT * FROM institutions WHERE id = $1', [req.params.id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Institution not found.' });
 
