@@ -14,6 +14,8 @@ export default function FacultyPage() {
   const [editingFac, setEditingFac] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [form, setForm] = useState({ name: '', empCode: '', dept: 'CSE', specialization: '', designation: '', maxHours: 22, currentHours: 0 });
+  const [formSubjectIds, setFormSubjectIds] = useState([]);
+  const [formAssignmentDepartmentIds, setFormAssignmentDepartmentIds] = useState([]);
   const [errorMsg, setErrorMsg] = useState('');
   const [assignmentFaculty, setAssignmentFaculty] = useState(null);
   const [assignmentDepartments, setAssignmentDepartments] = useState([]);
@@ -87,6 +89,13 @@ export default function FacultyPage() {
     return ms && md;
   }), [facultyList, search, deptFilter]);
 
+  const formSubjectOptions = useMemo(() => {
+    const selectedDepartments = formAssignmentDepartmentIds.length
+      ? formAssignmentDepartmentIds
+      : departments.filter(d => d.code === form.dept).map(d => d.id);
+    return subjects.filter(subject => selectedDepartments.includes(subject.departmentId));
+  }, [departments, form.dept, formAssignmentDepartmentIds, subjects]);
+
   const openAdd = () => {
     setEditingFac(null);
     setForm({
@@ -98,12 +107,16 @@ export default function FacultyPage() {
       maxHours: 22,
       currentHours: 0,
     });
+    setFormSubjectIds([]);
+    setFormAssignmentDepartmentIds([]);
     setErrorMsg('');
     setShowModal(true);
   };
 
-  const openEdit = (f) => {
+  const openEdit = async (f) => {
     setEditingFac(f);
+    setFormSubjectIds([]);
+    setFormAssignmentDepartmentIds([]);
     setForm({
       name: f.name,
       empCode: f.empCode,
@@ -115,6 +128,20 @@ export default function FacultyPage() {
     });
     setErrorMsg('');
     setShowModal(true);
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`/api/faculty/${f.id}/assignments`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const rows = await res.json();
+        setFormSubjectIds([...new Set(rows.map(row => row.subject_id))]);
+        setFormAssignmentDepartmentIds([...new Set(rows.map(row => row.department_id))]);
+      }
+    } catch {
+      setErrorMsg('Unable to load faculty subjects.');
+    }
   };
 
   const handleSave = async () => {
@@ -131,6 +158,7 @@ export default function FacultyPage() {
       const matchedDept = departments.find(d => d.code === form.dept);
       const departmentId = matchedDept ? matchedDept.id : null;
 
+      let facultyId = editingFac?.id;
       if (editingFac) {
         const res = await fetch(`/api/faculty/${editingFac.id}`, {
           method: 'PUT',
@@ -166,6 +194,25 @@ export default function FacultyPage() {
           setErrorMsg(err.error || 'Failed to add faculty.');
           return;
         }
+        const created = await res.json();
+        facultyId = created.id;
+      }
+
+      const assignmentDepartmentIds = formAssignmentDepartmentIds.length
+        ? formAssignmentDepartmentIds
+        : (departmentId ? [departmentId] : []);
+      const assignmentRes = await fetch(`/api/faculty/${facultyId}/assignments`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({
+          departmentIds: assignmentDepartmentIds,
+          subjectIds: formSubjectIds,
+        }),
+      });
+      if (!assignmentRes.ok) {
+        const err = await assignmentRes.json();
+        setErrorMsg(err.error || 'Faculty saved, but subjects could not be assigned.');
+        return;
       }
 
       setShowModal(false);
@@ -322,6 +369,25 @@ export default function FacultyPage() {
                 </div>
                 <div className="form-group"><label className="form-label">Designation</label><input className="form-input" value={form.designation} onChange={e => setForm({ ...form, designation: e.target.value })} placeholder="Professor / Assistant Prof" /></div>
                 <div className="form-group" style={{ gridColumn: 'span 2' }}><label className="form-label">Specialization</label><input className="form-input" value={form.specialization} onChange={e => setForm({ ...form, specialization: e.target.value })} placeholder="e.g. Machine Learning, Networks" /></div>
+                <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                  <label className="form-label">Subjects</label>
+                  <select
+                    className="form-select"
+                    multiple
+                    size={Math.min(8, Math.max(4, formSubjectOptions.length))}
+                    value={formSubjectIds}
+                    onChange={e => setFormSubjectIds([...e.target.selectedOptions].map(option => option.value))}
+                  >
+                    {formSubjectOptions.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.departmentCode} · Sem {s.semester} · {s.code} - {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <small style={{ color: 'var(--text-muted)' }}>
+                    Use Ctrl/Cmd-click to select multiple subjects. Existing assignments across branches are preserved.
+                  </small>
+                </div>
                 <div className="form-group"><label className="form-label">Max Hours/Week</label><input className="form-input" type="number" value={form.maxHours} onChange={e => setForm({ ...form, maxHours: e.target.value })} /></div>
                 <div className="form-group"><label className="form-label">Current Hours</label><input className="form-input" type="number" value={form.currentHours} onChange={e => setForm({ ...form, currentHours: e.target.value })} /></div>
               </div>
