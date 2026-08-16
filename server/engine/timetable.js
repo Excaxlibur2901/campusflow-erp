@@ -95,12 +95,14 @@ export function generateTimetable({
   const lockedSectionSlots = existingSlots.filter(s => s.sectionCode === sectionCode && s.locked);
   const busyFacultySlots = new Set();
   const busyRoomSlots = new Set();
+  const busySubjectSlots = new Set();
   const usedSectionSlots = new Set();
 
   existingSlots.forEach(s => {
     if (s.sectionCode !== sectionCode || s.locked) {
       if (s.facultyId) busyFacultySlots.add(`${s.day}-${s.slotIdx}-${s.facultyId}`);
       if (s.roomId) busyRoomSlots.add(`${s.day}-${s.slotIdx}-${s.roomId}`);
+      if (s.subjectId) busySubjectSlots.add(`${s.day}-${s.slotIdx}-${s.subjectId}`);
     }
   });
 
@@ -138,11 +140,8 @@ export function generateTimetable({
 
   // Pre-check subject constraints: faculty assignment & room availability
   subjects.forEach(s => {
-    let faculty = facultyList.find(f => f.id === s.facultyId || f.name === s.facultyName);
-    if (!faculty && s.facultyId) {
-      faculty = { id: s.facultyId, name: s.facultyName || 'Faculty' };
-    }
-    if (!faculty) {
+    const faculties = getFacultyCandidates(s, facultyList);
+    if (!faculties.length) {
       hardConflicts.push({
         type: 'MISSING_FACULTY',
         message: `Subject ${s.code} (${s.name}) has no faculty assigned.`,
@@ -213,31 +212,21 @@ export function generateTimetable({
         const isLab = subject.subjectType === 'lab' || subject.type === 'lab' || subject.type === 'practical';
 
         // Match Faculty
-        let faculty = facultyList.find(f => f.id === subject.facultyId || f.name === subject.facultyName);
-        if (!faculty && subject.facultyId) {
-          faculty = { id: subject.facultyId, name: subject.facultyName || 'Faculty' };
-        }
+        const faculty = getFacultyCandidates(subject, facultyList).find(candidate => {
+          if (
+            facultyUnavailableSet.has(`${day}-${slotIdx}-${candidate.id}`) ||
+            facultyUnavailableSet.has(`${day}-${timeSlots[slotIdx]}-${candidate.id}`) ||
+            busyFacultySlots.has(`${day}-${slotIdx}-${candidate.id}`)
+          ) return false;
+          const currentHours = facultyHoursMap.get(candidate.id) || 0;
+          const maxHours = Number(candidate.maxWeeklyHours || candidate.max_weekly_hours || 22);
+          return currentHours + (isLab ? 2 : 1) <= maxHours;
+        });
         if (!faculty) continue;
-
-        // Check faculty unavailability
-        if (
-          facultyUnavailableSet.has(`${day}-${slotIdx}-${faculty.id}`) ||
-          facultyUnavailableSet.has(`${day}-${timeSlots[slotIdx]}-${faculty.id}`)
-        ) {
-          continue;
-        }
-
-        // Check faculty clash
-        if (busyFacultySlots.has(`${day}-${slotIdx}-${faculty.id}`)) {
-          continue;
-        }
-
-        // Check faculty max weekly hours
         const facCurrentHours = facultyHoursMap.get(faculty.id) || 0;
-        const facMaxHours = Number(faculty.maxWeeklyHours || faculty.max_weekly_hours || 22);
-        if (facCurrentHours + (isLab ? 2 : 1) > facMaxHours) {
-          continue;
-        }
+
+        // A subject cannot be taught to another section at the same time.
+        if (busySubjectSlots.has(`${day}-${slotIdx}-${subject.id}`)) continue;
 
         // Find available room
         const preferredType = isLab ? 'lab' : 'lecture';
@@ -269,6 +258,7 @@ export function generateTimetable({
           if (
             usedSectionSlots.has(nextSlotKey) ||
             busyFacultySlots.has(nextFacKey) ||
+            busySubjectSlots.has(`${day}-${nextSlotIdx}-${subject.id}`) ||
             busyRoomSlots.has(nextRoomKey) ||
             facultyUnavailableSet.has(`${day}-${nextSlotIdx}-${faculty.id}`)
           ) {
@@ -288,6 +278,8 @@ export function generateTimetable({
           usedSectionSlots.add(nextSlotKey);
           busyFacultySlots.add(`${day}-${slotIdx}-${faculty.id}`);
           busyFacultySlots.add(nextFacKey);
+          busySubjectSlots.add(`${day}-${slotIdx}-${subject.id}`);
+          busySubjectSlots.add(`${day}-${nextSlotIdx}-${subject.id}`);
           busyRoomSlots.add(`${day}-${slotIdx}-${availableRoom.id}`);
           busyRoomSlots.add(nextRoomKey);
 
@@ -315,6 +307,7 @@ export function generateTimetable({
           usedSectionSlots.add(slotKey);
           busyFacultySlots.add(`${day}-${slotIdx}-${faculty.id}`);
           busyRoomSlots.add(`${day}-${slotIdx}-${availableRoom.id}`);
+          busySubjectSlots.add(`${day}-${slotIdx}-${subject.id}`);
 
           break;
         }
@@ -424,6 +417,12 @@ export function validateMove({ targetSlot, existingSlots = [], classroomsList = 
       errors.push(`Section ${sectionCode} already has a class scheduled at ${day} slot ${slotIdx + 1}.`);
     }
 
+    // Do not allow the same subject to be taught to another class at the same
+    // time. This mirrors the generator's global subject occupancy check.
+    if (targetSlot.subjectId && slot.subjectId === targetSlot.subjectId) {
+      errors.push(`Subject is already scheduled for Section ${slot.sectionCode} at ${day} slot ${slotIdx + 1}.`);
+    }
+
     // Check Faculty Clash
     if (facultyId && slot.facultyId === facultyId) {
       errors.push(`Faculty is already teaching Section ${slot.sectionCode} at ${day} slot ${slotIdx + 1}.`);
@@ -454,6 +453,24 @@ export function validateMove({ targetSlot, existingSlots = [], classroomsList = 
     valid: errors.length === 0,
     errors,
   };
+}
+
+function getFacultyCandidates(subject, facultyList) {
+  const assignedIds = Array.isArray(subject.facultyIds) && subject.facultyIds.length
+    ? subject.facultyIds
+    : subject.facultyId
+      ? [subject.facultyId]
+      : [];
+
+  if (assignedIds.length) {
+    const candidates = facultyList.filter(f => assignedIds.includes(f.id));
+    if (candidates.length) return candidates;
+    if (subject.facultyId) return [{ id: subject.facultyId, name: subject.facultyName || 'Faculty' }];
+    return [];
+  }
+
+  const byName = facultyList.find(f => f.name === subject.facultyName || f.full_name === subject.facultyName);
+  return byName ? [byName] : [];
 }
 
 function createSlotEntry({ day, slotIdx, subject, faculty, room, sectionCode, type }) {

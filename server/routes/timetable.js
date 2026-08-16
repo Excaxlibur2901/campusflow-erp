@@ -90,20 +90,24 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
     // 1. Fetch PostgreSQL Subjects, Faculty, Classrooms for department/institution
     const [subRes, facRes, roomRes, secRes, existingRes] = await Promise.all([
       pool.query(
-        `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id
+        `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id,
+                ARRAY_AGG(DISTINCT fsa.faculty_id) FILTER (WHERE fsa.faculty_id IS NOT NULL) AS assigned_faculty_ids
          FROM subjects s
          JOIN departments d ON d.id = s.department_id
          LEFT JOIN semesters sem ON sem.id = s.semester_id
+         LEFT JOIN faculty_subject_assignments fsa
+           ON fsa.subject_id = s.id AND fsa.institution_id = d.institution_id
          WHERE d.code = $1 AND d.institution_id = $2 AND s.active = true
-           AND (s.semester = $3 OR sem.number = $3 OR (s.semester IS NULL AND s.semester_id IS NULL))`,
+           AND (s.semester = $3 OR sem.number = $3 OR (s.semester IS NULL AND s.semester_id IS NULL))
+         GROUP BY s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id`,
         [dept, req.user.institution_id, Number(semester)],
       ),
       pool.query(
         `SELECT f.id, f.full_name AS name, f.employee_code, f.max_weekly_hours
          FROM faculty f
          LEFT JOIN departments d ON d.id = f.department_id
-         WHERE f.institution_id = $1 AND (d.code = $2 OR f.department_id IS NULL) AND f.active = true`,
-        [req.user.institution_id, dept],
+         WHERE f.institution_id = $1 AND f.active = true`,
+        [req.user.institution_id],
       ),
       pool.query(
         `SELECT c.id, c.code, c.name, c.capacity, c.room_type
@@ -143,8 +147,10 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
 
     const subjectsToSchedule = (inputSubjects && Array.isArray(inputSubjects) && inputSubjects.length)
       ? inputSubjects
-      : subRes.rows.map((s, idx) => {
-          const assignedFac = facRes.rows.find(f => f.id === s.faculty_id) || (facRes.rows.length ? facRes.rows[idx % facRes.rows.length] : null);
+      : subRes.rows.map((s) => {
+          const assignedFac = facRes.rows.find(f =>
+            (s.assigned_faculty_ids || []).includes(f.id) || f.id === s.faculty_id
+          ) || null;
           const assignedRoom = roomRes.rows.find(r => r.id === s.room_id) || null;
           return {
             id: s.id,
@@ -153,12 +159,47 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
             type: s.subject_type || 'theory',
             weeklyHours: Number(s.weekly_hours || s.credits || 3),
             credits: Number(s.credits || 3),
-            facultyId: assignedFac?.id || null,
+            facultyIds: s.assigned_faculty_ids || (s.faculty_id ? [s.faculty_id] : []),
+            facultyId: assignedFac?.id || s.assigned_faculty_ids?.[0] || null,
             facultyName: assignedFac?.name || null,
             roomId: assignedRoom?.id || null,
             roomCode: assignedRoom?.code || null,
           };
         });
+
+    // Keep the response actionable when the selected department/semester has
+    // no active subjects. Previously this was returned as a generic 409 and
+    // the frontend hid the actual scheduling report.
+    if (subjectsToSchedule.length === 0) {
+      const report = {
+        ok: false,
+        error: `No active subjects found for department ${dept}, semester ${Number(semester)}.`,
+        subjectsFound: 0,
+        totalSlotsGenerated: 0,
+        hardConflicts: [{
+          type: 'NO_SUBJECTS',
+          message: `No active subjects found for department ${dept}, semester ${Number(semester)}.`,
+        }],
+        hardConflictCount: 1,
+        softViolations: [],
+        softViolationCount: 0,
+        unscheduledHours: [],
+        unscheduledCount: 0,
+        facultyWorkload: [],
+        roomUtilization: [],
+        score: 0,
+      };
+      return res.status(409).json({
+        slots: [],
+        hardConflicts: report.hardConflicts,
+        softViolations: [],
+        unscheduledHours: [],
+        facultyWorkload: [],
+        roomUtilization: [],
+        score: 0,
+        report,
+      });
+    }
 
     const existingSlots = existingRes.rows.map(r => ({
       id: r.id,
@@ -241,14 +282,21 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
             const timeSlotId = tsRes.rows[0].id;
 
             let soRes = await client.query(
-              `SELECT id FROM subject_offerings WHERE subject_id = $1 LIMIT 1`,
-              [slot.subjectId]
+              `SELECT so.id
+               FROM subject_offerings so
+               JOIN sections offering_sec ON offering_sec.semester_id = so.semester_id
+               WHERE so.subject_id = $1 AND offering_sec.id = $2
+                 AND (so.section_id IS NULL OR so.section_id = $2)
+               LIMIT 1`,
+              [slot.subjectId, sectionId]
             );
             if (soRes.rowCount === 0) {
               soRes = await client.query(
                 `INSERT INTO subject_offerings (subject_id, semester_id, weekly_hours)
-                 VALUES ($1, (SELECT semester_id FROM sections WHERE id = $2), 3) RETURNING id`,
-                [slot.subjectId, sectionId]
+                 VALUES ($1, (SELECT semester_id FROM sections WHERE id = $2),
+                         COALESCE((SELECT weekly_hours FROM subjects WHERE id = $1), 3))
+                 RETURNING id`,
+                [slot.subjectId, sectionId],
               );
             }
             const subjectOfferingId = soRes.rows[0]?.id;

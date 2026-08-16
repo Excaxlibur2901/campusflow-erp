@@ -41,6 +41,97 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* ── GET /api/faculty/:id/assignments ───────────────────────────── */
+router.get('/:id/assignments', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT fsa.id, fsa.faculty_id, fsa.department_id, fsa.subject_id,
+              d.code AS department_code, d.name AS department_name,
+              s.code AS subject_code, s.name AS subject_name,
+              COALESCE(s.semester, sem.number, 3) AS semester
+       FROM faculty_subject_assignments fsa
+       JOIN faculty f ON f.id = fsa.faculty_id
+       JOIN departments d ON d.id = fsa.department_id
+       JOIN subjects s ON s.id = fsa.subject_id
+       LEFT JOIN semesters sem ON sem.id = s.semester_id
+       WHERE fsa.faculty_id = $1 AND fsa.institution_id = $2
+       ORDER BY d.code, s.code`,
+      [req.params.id, req.user.institution_id],
+    );
+    return res.json(result.rows);
+  } catch (err) { next(err); }
+});
+
+/* ── PUT /api/faculty/:id/assignments ───────────────────────────── */
+router.put('/:id/assignments', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { departmentIds = [], subjectIds = [] } = req.body;
+    if (!Array.isArray(departmentIds) || !Array.isArray(subjectIds)) {
+      return res.status(400).json({ error: 'departmentIds and subjectIds must be arrays.' });
+    }
+
+    const facultyCheck = await client.query(
+      `SELECT id FROM faculty WHERE id = $1 AND institution_id = $2`,
+      [req.params.id, req.user.institution_id],
+    );
+    if (facultyCheck.rowCount === 0) return res.status(404).json({ error: 'Faculty not found.' });
+
+    const departments = await client.query(
+      `SELECT id FROM departments WHERE institution_id = $1 AND id = ANY($2::uuid[])`,
+      [req.user.institution_id, [...new Set(departmentIds)]],
+    );
+    const subjects = await client.query(
+      `SELECT id, department_id FROM subjects
+       WHERE id = ANY($1::uuid[]) AND active = true
+         AND department_id IN (SELECT id FROM departments WHERE institution_id = $2)`,
+      [[...new Set(subjectIds)], req.user.institution_id],
+    );
+    const departmentSet = new Set(departments.rows.map(row => row.id));
+    const validSubjects = subjects.rows.filter(row => departmentSet.has(row.department_id));
+    if (departments.rowCount !== new Set(departmentIds).size || validSubjects.length !== new Set(subjectIds).size) {
+      return res.status(400).json({ error: 'Every selected branch and subject must belong to this institution, and subjects must belong to a selected branch.' });
+    }
+
+    await client.query('BEGIN');
+    await client.query(
+      `DELETE FROM faculty_subject_assignments
+       WHERE faculty_id = $1 AND institution_id = $2`,
+      [req.params.id, req.user.institution_id],
+    );
+
+    for (const subject of validSubjects) {
+      await client.query(
+        `INSERT INTO faculty_subject_assignments
+           (institution_id, faculty_id, department_id, subject_id, created_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.user.institution_id, req.params.id, subject.department_id, subject.id, req.user.id],
+      );
+    }
+    await client.query('COMMIT');
+
+    const saved = await pool.query(
+      `SELECT fsa.id, fsa.faculty_id, fsa.department_id, fsa.subject_id,
+              d.code AS department_code, d.name AS department_name,
+              s.code AS subject_code, s.name AS subject_name,
+              COALESCE(s.semester, sem.number, 3) AS semester
+       FROM faculty_subject_assignments fsa
+       JOIN departments d ON d.id = fsa.department_id
+       JOIN subjects s ON s.id = fsa.subject_id
+       LEFT JOIN semesters sem ON sem.id = s.semester_id
+       WHERE fsa.faculty_id = $1 AND fsa.institution_id = $2
+       ORDER BY d.code, s.code`,
+      [req.params.id, req.user.institution_id],
+    );
+    return res.json(saved.rows);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    next(err);
+  } finally {
+    client.release();
+  }
+});
+
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
     const { employeeCode, fullName, email, phone, departmentId, specialization, maxWeeklyHours } = req.body;
