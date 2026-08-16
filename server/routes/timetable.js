@@ -80,6 +80,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
   try {
     const {
       dept = 'CSE',
+      semester = 3,
       sectionCode = 'A',
       days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
       timeSlots = ['9:00-9:50', '9:50-10:40', '10:40-11:30', '11:30-12:20', '1:10-2:00', '2:00-2:50', '2:50-3:40'],
@@ -89,11 +90,13 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
     // 1. Fetch PostgreSQL Subjects, Faculty, Classrooms for department/institution
     const [subRes, facRes, roomRes, secRes, existingRes] = await Promise.all([
       pool.query(
-        `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours
+        `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id
          FROM subjects s
          JOIN departments d ON d.id = s.department_id
-         WHERE d.code = $1 AND d.institution_id = $2 AND s.active = true`,
-        [dept, req.user.institution_id],
+         LEFT JOIN semesters sem ON sem.id = s.semester_id
+         WHERE d.code = $1 AND d.institution_id = $2 AND s.active = true
+           AND (s.semester = $3 OR sem.number = $3 OR (s.semester IS NULL AND s.semester_id IS NULL))`,
+        [dept, req.user.institution_id, Number(semester)],
       ),
       pool.query(
         `SELECT f.id, f.full_name AS name, f.employee_code, f.max_weekly_hours
@@ -113,8 +116,8 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
          JOIN semesters sem ON sem.id = sec.semester_id
          JOIN programs p ON p.id = sem.program_id
          JOIN departments d ON d.id = p.department_id
-         WHERE d.institution_id = $1 AND d.code = $2 AND sec.code = $3 LIMIT 1`,
-        [req.user.institution_id, dept, sectionCode],
+         WHERE d.institution_id = $1 AND d.code = $2 AND sec.code = $3 AND sem.number = $4 LIMIT 1`,
+        [req.user.institution_id, dept, sectionCode, Number(semester)],
       ),
       pool.query(
         `SELECT te.id, te.locked,
@@ -147,7 +150,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
             id: s.id,
             code: s.code,
             name: s.name,
-            type: s.subject_type,
+            type: s.subject_type || 'theory',
             weeklyHours: Number(s.weekly_hours || s.credits || 3),
             credits: Number(s.credits || 3),
             facultyId: assignedFac?.id || null,
@@ -188,20 +191,29 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       try {
         await client.query('BEGIN');
 
-        // Fetch or create section_id
+        // Fetch or create section_id for the department and semester
         let sectionId = secRes.rows[0]?.id;
         if (!sectionId) {
-          const defaultSem = await client.query(`
+          let semRes = await client.query(`
             SELECT sem.id FROM semesters sem
             JOIN programs p ON p.id = sem.program_id
             JOIN departments d ON d.id = p.department_id
-            WHERE d.institution_id = $1 LIMIT 1
-          `, [req.user.institution_id]);
+            WHERE d.institution_id = $1 AND d.code = $2 AND sem.number = $3 LIMIT 1
+          `, [req.user.institution_id, dept, Number(semester)]);
 
-          if (defaultSem.rowCount > 0) {
+          if (semRes.rowCount === 0) {
+            semRes = await client.query(`
+              SELECT sem.id FROM semesters sem
+              JOIN programs p ON p.id = sem.program_id
+              JOIN departments d ON d.id = p.department_id
+              WHERE d.institution_id = $1 AND d.code = $2 LIMIT 1
+            `, [req.user.institution_id, dept]);
+          }
+
+          if (semRes.rowCount > 0) {
             const newSec = await client.query(
               `INSERT INTO sections (semester_id, code, capacity) VALUES ($1, $2, 60) RETURNING id`,
-              [defaultSem.rows[0].id, sectionCode],
+              [semRes.rows[0].id, sectionCode],
             );
             sectionId = newSec.rows[0].id;
           }

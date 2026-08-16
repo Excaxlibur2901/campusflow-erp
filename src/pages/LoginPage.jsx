@@ -9,7 +9,7 @@ import {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login, registerAccount, fetchInstitutions } = useAuth();
+  const { login, registerAccount, fetchInstitutions, setupDone } = useAuth();
 
   // Mode: 'login' | 'register' | 'home'
   const [mode, setMode] = useState('login');
@@ -318,6 +318,27 @@ export default function LoginPage() {
 
       <div className="login-right">
         <div className="login-card" style={{ maxWidth: 460, width: '100%' }}>
+          {!setupDone && (
+            <div style={{
+              background: 'rgba(46, 117, 182, 0.1)', border: '1px solid var(--primary)',
+              borderRadius: 8, padding: '12px 14px', fontSize: 13, color: 'var(--primary)',
+              fontWeight: 600, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 8
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Building2 size={18} />
+                <span>System Not Initialized: Setup your college to get started.</span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => navigate('/setup')}
+                style={{ width: '100%' }}
+              >
+                Launch Setup Wizard
+              </button>
+            </div>
+          )}
+
           {/* Mode Switcher Tabs */}
           <div style={{
             display: 'flex', background: 'var(--bg-main)', padding: 4, borderRadius: 10, marginBottom: 24, gap: 4
@@ -325,7 +346,7 @@ export default function LoginPage() {
             <button
               type="button"
               style={{
-                flex: 1, padding: '8px 12px', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                flex: 1, padding: '8px 8px', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 700,
                 cursor: 'pointer', transition: 'all 0.2s',
                 background: mode === 'login' ? '#fff' : 'transparent',
                 color: mode === 'login' ? 'var(--primary)' : 'var(--text-muted)',
@@ -333,13 +354,13 @@ export default function LoginPage() {
               }}
               onClick={() => { setMode('login'); setError(''); setSuccessMsg(''); }}
             >
-              <LogIn size={14} style={{ display: 'inline', marginRight: 6 }} />
+              <LogIn size={13} style={{ display: 'inline', marginRight: 4 }} />
               Sign In
             </button>
             <button
               type="button"
               style={{
-                flex: 1, padding: '8px 12px', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                flex: 1, padding: '8px 8px', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 700,
                 cursor: 'pointer', transition: 'all 0.2s',
                 background: mode === 'register' ? '#fff' : 'transparent',
                 color: mode === 'register' ? 'var(--primary)' : 'var(--text-muted)',
@@ -347,8 +368,21 @@ export default function LoginPage() {
               }}
               onClick={() => { setMode('register'); setError(''); setSuccessMsg(''); }}
             >
-              <UserPlus size={14} style={{ display: 'inline', marginRight: 6 }} />
-              Create Student Account
+              <UserPlus size={13} style={{ display: 'inline', marginRight: 4 }} />
+              Student
+            </button>
+            <button
+              type="button"
+              style={{
+                flex: 1, padding: '8px 8px', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 700,
+                cursor: 'pointer', transition: 'all 0.2s',
+                background: 'transparent',
+                color: 'var(--primary)',
+              }}
+              onClick={() => navigate('/setup')}
+            >
+              <Building2 size={13} style={{ display: 'inline', marginRight: 4 }} />
+              Register College
             </button>
           </div>
 

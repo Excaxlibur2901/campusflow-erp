@@ -6,12 +6,13 @@ export default function SubjectsPage() {
   const { getAccessToken } = useAuth();
   const [subjectsList, setSubjectsList] = useState([]);
   const [departments, setDepartments] = useState([]);
+  const [facultyList, setFacultyList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('All');
   const [showModal, setShowModal] = useState(false);
   const [editingSub, setEditingSub] = useState(null);
-  const [form, setForm] = useState({ code: '', name: '', dept: 'CSE', credits: 3, type: 'theory', weeklyHours: 3, semester: 3 });
+  const [form, setForm] = useState({ code: '', name: '', dept: 'CSE', credits: 3, type: 'theory', weeklyHours: 3, semester: 3, facultyId: '' });
   const [errorMsg, setErrorMsg] = useState('');
 
   const loadData = useCallback(async () => {
@@ -19,9 +20,10 @@ export default function SubjectsPage() {
       const token = await getAccessToken();
       const headers = { Authorization: `Bearer ${token}` };
 
-      const [subRes, deptRes] = await Promise.all([
+      const [subRes, deptRes, facRes] = await Promise.all([
         fetch('/api/subjects', { headers }),
         fetch('/api/departments', { headers }),
+        fetch('/api/faculty?limit=200', { headers }),
       ]);
 
       if (deptRes.ok) {
@@ -32,6 +34,16 @@ export default function SubjectsPage() {
         }
       }
 
+      if (facRes.ok) {
+        const fData = await facRes.json();
+        const fRows = fData.data || fData;
+        setFacultyList(fRows.map(f => ({
+          id: f.id,
+          name: f.full_name || f.name || '',
+          dept: f.dept_code || f.dept || '',
+        })));
+      }
+
       if (subRes.ok) {
         const sData = await subRes.json();
         setSubjectsList(sData.map(s => ({
@@ -40,6 +52,8 @@ export default function SubjectsPage() {
           name: s.name || '',
           dept: s.dept_code || s.dept || 'CSE',
           departmentId: s.department_id,
+          facultyId: s.faculty_id || null,
+          facultyName: s.faculty_name || '',
           credits: Number(s.credits || 3),
           type: s.subject_type || s.type || 'theory',
           weeklyHours: Number(s.weekly_hours || s.weeklyHours || 3),
@@ -60,7 +74,8 @@ export default function SubjectsPage() {
 
   const filtered = useMemo(() => subjectsList.filter(s => {
     const ms = (s.name || '').toLowerCase().includes(search.toLowerCase()) ||
-               (s.code || '').toLowerCase().includes(search.toLowerCase());
+               (s.code || '').toLowerCase().includes(search.toLowerCase()) ||
+               (s.facultyName || '').toLowerCase().includes(search.toLowerCase());
     const md = deptFilter === 'All' || s.dept === deptFilter;
     return ms && md;
   }), [subjectsList, search, deptFilter]);
@@ -75,6 +90,7 @@ export default function SubjectsPage() {
       type: 'theory',
       weeklyHours: 3,
       semester: 3,
+      facultyId: '',
     });
     setErrorMsg('');
     setShowModal(true);
@@ -90,6 +106,7 @@ export default function SubjectsPage() {
       type: s.type,
       weeklyHours: s.weeklyHours,
       semester: s.semester,
+      facultyId: s.facultyId || '',
     });
     setErrorMsg('');
     setShowModal(true);
@@ -119,6 +136,8 @@ export default function SubjectsPage() {
             subjectType: form.type,
             credits: Number(form.credits),
             weeklyHours: Number(form.weeklyHours),
+            semester: Number(form.semester),
+            facultyId: form.facultyId || null,
           }),
         });
         if (!res.ok) {
@@ -136,7 +155,9 @@ export default function SubjectsPage() {
             subjectType: form.type,
             credits: Number(form.credits),
             weeklyHours: Number(form.weeklyHours),
+            semester: Number(form.semester),
             departmentId,
+            facultyId: form.facultyId || null,
           }),
         });
         if (!res.ok) {
@@ -197,7 +218,7 @@ export default function SubjectsPage() {
         ) : (
           <table>
             <thead>
-              <tr><th>Code</th><th>Subject Name</th><th>Department</th><th>Credits</th><th>Type</th><th>Weekly Hours</th><th>Semester</th><th>Actions</th></tr>
+              <tr><th>Code</th><th>Subject Name</th><th>Department</th><th>Faculty</th><th>Credits</th><th>Type</th><th>Weekly Hours</th><th>Semester</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {filtered.map(s => (
@@ -205,6 +226,7 @@ export default function SubjectsPage() {
                   <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{s.code}</td>
                   <td style={{ fontWeight: 500 }}>{s.name}</td>
                   <td><span className="badge badge-info">{s.dept}</span></td>
+                  <td>{s.facultyName ? <span className="badge badge-neutral" style={{ fontWeight: 600 }}>{s.facultyName}</span> : <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Unassigned</span>}</td>
                   <td style={{ fontWeight: 600 }}>{s.credits}</td>
                   <td><span className={`badge ${s.type === 'lab' ? 'badge-warning' : 'badge-neutral'}`}>{s.type}</span></td>
                   <td>{s.weeklyHours}h</td>
@@ -217,7 +239,7 @@ export default function SubjectsPage() {
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan="8" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No subjects found</td></tr>}
+              {filtered.length === 0 && <tr><td colSpan="9" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No subjects found</td></tr>}
             </tbody>
           </table>
         )}
@@ -239,6 +261,14 @@ export default function SubjectsPage() {
                 <div className="form-group"><label className="form-label">Department</label>
                   <select className="form-select" value={form.dept} onChange={e => setForm({ ...form, dept: e.target.value })}>
                     {departments.map(d => <option key={d.id} value={d.code}>{d.code}</option>)}
+                  </select>
+                </div>
+                <div className="form-group"><label className="form-label">Assigned Faculty</label>
+                  <select className="form-select" value={form.facultyId} onChange={e => setForm({ ...form, facultyId: e.target.value })}>
+                    <option value="">-- Unassigned --</option>
+                    {facultyList.filter(f => !form.dept || f.dept === form.dept || f.dept === 'All' || !f.dept).map(f => (
+                      <option key={f.id} value={f.id}>{f.name} {f.dept ? `(${f.dept})` : ''}</option>
+                    ))}
                   </select>
                 </div>
                 <div className="form-group"><label className="form-label">Type</label><select className="form-select" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}><option value="theory">Theory</option><option value="lab">Lab</option></select></div>
