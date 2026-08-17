@@ -88,7 +88,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
     } = req.body;
 
     // 1. Fetch PostgreSQL Subjects, Faculty, Classrooms for department/institution
-    const [subRes, facRes, roomRes, secRes, existingRes] = await Promise.all([
+    const [subRes, facRes, roomRes, secRes, semesterRes, existingRes] = await Promise.all([
       pool.query(
         `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id,
                 ARRAY_AGG(DISTINCT fsa.faculty_id) FILTER (WHERE fsa.faculty_id IS NOT NULL) AS assigned_faculty_ids
@@ -98,7 +98,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
          LEFT JOIN faculty_subject_assignments fsa
            ON fsa.subject_id = s.id AND fsa.institution_id = d.institution_id
          WHERE d.code = $1 AND d.institution_id = $2 AND s.active = true
-           AND (s.semester = $3 OR sem.number = $3 OR (s.semester IS NULL AND s.semester_id IS NULL))
+           AND (s.semester = $3 OR sem.number = $3)
          GROUP BY s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id`,
         [dept, req.user.institution_id, Number(semester)],
       ),
@@ -122,6 +122,15 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
          JOIN departments d ON d.id = p.department_id
          WHERE d.institution_id = $1 AND d.code = $2 AND sec.code = $3 AND sem.number = $4 LIMIT 1`,
         [req.user.institution_id, dept, sectionCode, Number(semester)],
+      ),
+      pool.query(
+        `SELECT sem.id
+         FROM semesters sem
+         JOIN programs p ON p.id = sem.program_id
+         JOIN departments d ON d.id = p.department_id
+         WHERE d.institution_id = $1 AND d.code = $2 AND sem.number = $3
+         LIMIT 1`,
+        [req.user.institution_id, dept, Number(semester)],
       ),
       pool.query(
         `SELECT te.id, te.locked,
@@ -201,6 +210,25 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       });
     }
 
+    if (secRes.rowCount === 0 && semesterRes.rowCount === 0) {
+      const message = `Semester ${Number(semester)} is not configured for department ${dept}.`;
+      const report = {
+        ok: false,
+        error: message,
+        totalSlotsGenerated: 0,
+        hardConflicts: [{ type: 'SEMESTER_NOT_CONFIGURED', message }],
+        hardConflictCount: 1,
+        softViolations: [],
+        softViolationCount: 0,
+        unscheduledHours: [],
+        unscheduledCount: 0,
+        facultyWorkload: [],
+        roomUtilization: [],
+        score: 0,
+      };
+      return res.status(409).json({ slots: [], hardConflicts: report.hardConflicts, report });
+    }
+
     const existingSlots = existingRes.rows.map(r => ({
       id: r.id,
       day: r.time_slot_label?.split('-')[0] || 'Mon',
@@ -241,15 +269,6 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
             JOIN departments d ON d.id = p.department_id
             WHERE d.institution_id = $1 AND d.code = $2 AND sem.number = $3 LIMIT 1
           `, [req.user.institution_id, dept, Number(semester)]);
-
-          if (semRes.rowCount === 0) {
-            semRes = await client.query(`
-              SELECT sem.id FROM semesters sem
-              JOIN programs p ON p.id = sem.program_id
-              JOIN departments d ON d.id = p.department_id
-              WHERE d.institution_id = $1 AND d.code = $2 LIMIT 1
-            `, [req.user.institution_id, dept]);
-          }
 
           if (semRes.rowCount > 0) {
             const newSec = await client.query(

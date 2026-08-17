@@ -45,16 +45,28 @@ router.get('/', async (req, res, next) => {
 router.get('/:id/assignments', async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT fsa.id, fsa.faculty_id, fsa.department_id, fsa.subject_id,
+      `WITH assignments AS (
+         SELECT fsa.id, fsa.faculty_id, fsa.department_id, fsa.subject_id, 1 AS priority
+         FROM faculty_subject_assignments fsa
+         WHERE fsa.faculty_id = $1 AND fsa.institution_id = $2
+         UNION ALL
+         SELECT s.id, s.faculty_id, s.department_id, s.id, 2 AS priority
+         FROM subjects s
+         JOIN faculty f ON f.id = s.faculty_id
+         WHERE s.faculty_id = $1 AND f.institution_id = $2
+       ), preferred AS (
+         SELECT DISTINCT ON (subject_id) id, faculty_id, department_id, subject_id
+         FROM assignments
+         ORDER BY subject_id, priority
+       )
+       SELECT p.id, p.faculty_id, p.department_id, p.subject_id,
               d.code AS department_code, d.name AS department_name,
               s.code AS subject_code, s.name AS subject_name,
-              COALESCE(s.semester, sem.number, 3) AS semester
-       FROM faculty_subject_assignments fsa
-       JOIN faculty f ON f.id = fsa.faculty_id
-       JOIN departments d ON d.id = fsa.department_id
-       JOIN subjects s ON s.id = fsa.subject_id
+              COALESCE(s.semester, sem.number) AS semester
+       FROM preferred p
+       JOIN departments d ON d.id = p.department_id AND d.institution_id = $2
+       JOIN subjects s ON s.id = p.subject_id
        LEFT JOIN semesters sem ON sem.id = s.semester_id
-       WHERE fsa.faculty_id = $1 AND fsa.institution_id = $2
        ORDER BY d.code, s.code`,
       [req.params.id, req.user.institution_id],
     );
