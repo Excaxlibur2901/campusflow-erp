@@ -24,7 +24,7 @@ import documentRoutes    from './routes/documents.js';
 import auditRoutes       from './routes/audit.js';
 
 const app = express();
-const port = Number(process.env.API_PORT ?? 4000);
+const port = Number(process.env.PORT || process.env.API_PORT || 4000);
 
 /* ── Trust proxy configuration ─────────────────────────────────── */
 // Trust single Nginx reverse proxy hop in Docker deployment

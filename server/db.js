@@ -7,7 +7,13 @@ const hasDiscretePgConfig = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD'].som
 );
 
 const ssl =
-  process.env.PGSSLMODE === 'require'
+  process.env.PGSSLMODE === 'require' ||
+  process.env.DATABASE_SSL === 'true' ||
+  (process.env.NODE_ENV === 'production' &&
+    process.env.DATABASE_URL &&
+    !process.env.DATABASE_URL.includes('localhost') &&
+    !process.env.DATABASE_URL.includes('127.0.0.1') &&
+    !process.env.DATABASE_URL.includes('postgres:5432'))
     ? { rejectUnauthorized: false }
     : undefined;
 
