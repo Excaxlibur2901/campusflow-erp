@@ -157,8 +157,16 @@ export default function FacultyPage() {
 
       const matchedDept = departments.find(d => d.code === form.dept);
       const departmentId = matchedDept ? matchedDept.id : null;
+      const selectedSubjectDepartmentIds = subjects
+        .filter(subject => formSubjectIds.includes(subject.id))
+        .map(subject => subject.departmentId)
+        .filter(Boolean);
+      const assignmentDepartmentIds = [...new Set([
+        ...formAssignmentDepartmentIds,
+        ...selectedSubjectDepartmentIds,
+        ...(departmentId ? [departmentId] : []),
+      ])];
 
-      let facultyId = editingFac?.id;
       if (editingFac) {
         const res = await fetch(`/api/faculty/${editingFac.id}`, {
           method: 'PUT',
@@ -169,6 +177,9 @@ export default function FacultyPage() {
             specialization: form.specialization,
             designation: form.designation,
             maxWeeklyHours: Number(form.maxHours),
+            currentHours: Number(form.currentHours),
+            departmentIds: assignmentDepartmentIds,
+            subjectIds: formSubjectIds,
           }),
         });
         if (!res.ok) {
@@ -187,6 +198,9 @@ export default function FacultyPage() {
             specialization: form.specialization,
             designation: form.designation,
             maxWeeklyHours: Number(form.maxHours),
+            currentHours: Number(form.currentHours),
+            departmentIds: assignmentDepartmentIds,
+            subjectIds: formSubjectIds,
           }),
         });
         if (!res.ok) {
@@ -194,25 +208,7 @@ export default function FacultyPage() {
           setErrorMsg(err.error || 'Failed to add faculty.');
           return;
         }
-        const created = await res.json();
-        facultyId = created.id;
-      }
-
-      const assignmentDepartmentIds = formAssignmentDepartmentIds.length
-        ? formAssignmentDepartmentIds
-        : (departmentId ? [departmentId] : []);
-      const assignmentRes = await fetch(`/api/faculty/${facultyId}/assignments`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({
-          departmentIds: assignmentDepartmentIds,
-          subjectIds: formSubjectIds,
-        }),
-      });
-      if (!assignmentRes.ok) {
-        const err = await assignmentRes.json();
-        setErrorMsg(err.error || 'Faculty saved, but subjects could not be assigned.');
-        return;
+        await res.json();
       }
 
       setShowModal(false);

@@ -10,6 +10,88 @@ import { auditLog } from '../utils/audit.js';
 const router = Router();
 router.use(authenticateUser);
 
+async function validateAssignmentSelection(client, institutionId, facultyId, departmentIds = [], subjectIds = []) {
+  if (!Array.isArray(departmentIds) || !Array.isArray(subjectIds)) {
+    const error = new Error('departmentIds and subjectIds must be arrays.');
+    error.status = 400;
+    throw error;
+  }
+  const uniqueDepartmentIds = [...new Set(departmentIds)];
+  const uniqueSubjectIds = [...new Set(subjectIds)];
+  const departments = await client.query(
+    `SELECT id FROM departments WHERE institution_id = $1 AND id = ANY($2::uuid[])`,
+    [institutionId, uniqueDepartmentIds],
+  );
+  const subjects = await client.query(
+    `SELECT id, department_id FROM subjects
+     WHERE id = ANY($1::uuid[]) AND active = true
+       AND department_id IN (SELECT id FROM departments WHERE institution_id = $2)`,
+    [uniqueSubjectIds, institutionId],
+  );
+  const departmentSet = new Set(departments.rows.map(row => row.id));
+  const validSubjects = subjects.rows.filter(row => departmentSet.has(row.department_id));
+  if (departments.rowCount !== uniqueDepartmentIds.length || validSubjects.length !== uniqueSubjectIds.length) {
+    const error = new Error('Every selected branch and subject must belong to this institution, and each subject must belong to a selected branch.');
+    error.status = 400;
+    throw error;
+  }
+  return { departmentIds: uniqueDepartmentIds, subjects: validSubjects };
+}
+
+async function replaceFacultyAssignments(client, institutionId, facultyId, departmentIds, subjectIds, userId) {
+  const selection = await validateAssignmentSelection(client, institutionId, facultyId, departmentIds, subjectIds);
+  const affected = await client.query(
+    `SELECT subject_id FROM faculty_subject_assignments
+     WHERE faculty_id = $1 AND institution_id = $2`,
+    [facultyId, institutionId],
+  );
+  const affectedSubjectIds = new Set(affected.rows.map(row => row.subject_id));
+  selection.subjects.forEach(subject => affectedSubjectIds.add(subject.id));
+
+  await client.query(
+    `DELETE FROM faculty_subject_assignments WHERE faculty_id = $1 AND institution_id = $2`,
+    [facultyId, institutionId],
+  );
+  for (const subject of selection.subjects) {
+    await client.query(
+      `INSERT INTO faculty_subject_assignments
+         (institution_id, faculty_id, department_id, subject_id, created_by)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [institutionId, facultyId, subject.department_id, subject.id, userId],
+    );
+  }
+  await syncLegacyFacultyColumns(client, institutionId, [...affectedSubjectIds]);
+}
+
+async function syncLegacyFacultyColumns(client, institutionId, subjectIds) {
+  if (!subjectIds.length) return;
+  await client.query(
+    `UPDATE subjects s
+     SET faculty_id = selected.faculty_id
+     FROM (
+       SELECT DISTINCT ON (fsa.subject_id) fsa.subject_id, fsa.faculty_id
+       FROM faculty_subject_assignments fsa
+       JOIN faculty f ON f.id = fsa.faculty_id AND f.institution_id = $1
+       WHERE fsa.institution_id = $1 AND fsa.subject_id = ANY($2::uuid[])
+       ORDER BY fsa.subject_id, fsa.created_at DESC, fsa.id DESC
+     ) selected
+     WHERE s.id = selected.subject_id
+       AND s.id = ANY($2::uuid[])`,
+    [institutionId, subjectIds],
+  );
+  await client.query(
+    `UPDATE subjects
+     SET faculty_id = NULL
+     WHERE id = ANY($1::uuid[])
+       AND department_id IN (SELECT id FROM departments WHERE institution_id = $2)
+       AND NOT EXISTS (
+         SELECT 1 FROM faculty_subject_assignments fsa
+         WHERE fsa.subject_id = subjects.id AND fsa.institution_id = $2
+       )`,
+    [subjectIds, institutionId],
+  );
+}
+
 router.get('/', async (req, res, next) => {
   try {
     const { dept, search, page = '1', limit = '100' } = req.query;
@@ -79,9 +161,6 @@ router.put('/:id/assignments', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), a
   const client = await pool.connect();
   try {
     const { departmentIds = [], subjectIds = [] } = req.body;
-    if (!Array.isArray(departmentIds) || !Array.isArray(subjectIds)) {
-      return res.status(400).json({ error: 'departmentIds and subjectIds must be arrays.' });
-    }
 
     const facultyCheck = await client.query(
       `SELECT id FROM faculty WHERE id = $1 AND institution_id = $2`,
@@ -89,37 +168,8 @@ router.put('/:id/assignments', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), a
     );
     if (facultyCheck.rowCount === 0) return res.status(404).json({ error: 'Faculty not found.' });
 
-    const departments = await client.query(
-      `SELECT id FROM departments WHERE institution_id = $1 AND id = ANY($2::uuid[])`,
-      [req.user.institution_id, [...new Set(departmentIds)]],
-    );
-    const subjects = await client.query(
-      `SELECT id, department_id FROM subjects
-       WHERE id = ANY($1::uuid[]) AND active = true
-         AND department_id IN (SELECT id FROM departments WHERE institution_id = $2)`,
-      [[...new Set(subjectIds)], req.user.institution_id],
-    );
-    const departmentSet = new Set(departments.rows.map(row => row.id));
-    const validSubjects = subjects.rows.filter(row => departmentSet.has(row.department_id));
-    if (departments.rowCount !== new Set(departmentIds).size || validSubjects.length !== new Set(subjectIds).size) {
-      return res.status(400).json({ error: 'Every selected branch and subject must belong to this institution, and subjects must belong to a selected branch.' });
-    }
-
     await client.query('BEGIN');
-    await client.query(
-      `DELETE FROM faculty_subject_assignments
-       WHERE faculty_id = $1 AND institution_id = $2`,
-      [req.params.id, req.user.institution_id],
-    );
-
-    for (const subject of validSubjects) {
-      await client.query(
-        `INSERT INTO faculty_subject_assignments
-           (institution_id, faculty_id, department_id, subject_id, created_by)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [req.user.institution_id, req.params.id, subject.department_id, subject.id, req.user.id],
-      );
-    }
+    await replaceFacultyAssignments(client, req.user.institution_id, req.params.id, departmentIds, subjectIds, req.user.id);
     await client.query('COMMIT');
 
     const saved = await pool.query(
@@ -138,6 +188,7 @@ router.put('/:id/assignments', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), a
     return res.json(saved.rows);
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
   } finally {
     client.release();
@@ -145,45 +196,73 @@ router.put('/:id/assignments', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), a
 });
 
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
+  const client = await pool.connect();
   try {
-    const { employeeCode, fullName, email, phone, departmentId, specialization, maxWeeklyHours } = req.body;
+    const { employeeCode, fullName, email, phone, departmentId, specialization, designation, maxWeeklyHours, currentHours, departmentIds, subjectIds } = req.body;
     if (!employeeCode?.trim()) return res.status(400).json({ error: 'Employee code is required.' });
     if (!fullName?.trim())     return res.status(400).json({ error: 'Full name is required.' });
-    const result = await pool.query(
-      `INSERT INTO faculty (institution_id, department_id, employee_code, full_name, email, phone, specialization, max_weekly_hours, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
+    await client.query('BEGIN');
+    const result = await client.query(
+      `INSERT INTO faculty (institution_id, department_id, employee_code, full_name, email, phone, specialization, designation, max_weekly_hours, current_hours, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING *`,
       [req.user.institution_id, departmentId ?? null, employeeCode.trim(), fullName.trim(),
        email?.trim() ?? null, phone?.trim() ?? null, specialization?.trim() ?? null,
-       maxWeeklyHours ?? 22, req.user.id],
+       designation?.trim() || 'Faculty', maxWeeklyHours ?? 22,
+       currentHours === undefined ? 0 : Number(currentHours), req.user.id],
     );
+    if (departmentIds !== undefined || subjectIds !== undefined) {
+      await replaceFacultyAssignments(client, req.user.institution_id, result.rows[0].id,
+        departmentIds ?? (departmentId ? [departmentId] : []), subjectIds ?? [], req.user.id);
+    }
+    await client.query('COMMIT');
     await auditLog({ userId: req.user.id, action: 'CREATE', module: 'Faculty', entity: fullName.trim(), entityId: result.rows[0].id });
-    return res.status(201).json(result.rows[0]);
+    const saved = await pool.query('SELECT * FROM faculty WHERE id = $1 AND institution_id = $2', [result.rows[0].id, req.user.institution_id]);
+    return res.status(201).json(saved.rows[0]);
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     if (err.code === '23505') return res.status(409).json({ error: 'Faculty with this employee code already exists.' });
+    if (err.status) return res.status(err.status).json({ error: err.message });
     next(err);
+  } finally {
+    client.release();
   }
 });
 
 router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
+  const client = await pool.connect();
   try {
-    const before = await pool.query('SELECT * FROM faculty WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
+    const before = await client.query('SELECT * FROM faculty WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Faculty not found.' });
-    const { fullName, email, phone, departmentId, specialization, maxWeeklyHours, active } = req.body;
-    const result = await pool.query(
+    const { fullName, email, phone, departmentId, specialization, designation, maxWeeklyHours, currentHours, active, departmentIds, subjectIds } = req.body;
+    await client.query('BEGIN');
+    await client.query(
       `UPDATE faculty SET
          full_name = COALESCE($1, full_name), email = COALESCE($2, email),
          phone = COALESCE($3, phone), department_id = COALESCE($4, department_id),
-         specialization = COALESCE($5, specialization),
-         max_weekly_hours = COALESCE($6, max_weekly_hours),
-         active = COALESCE($7, active), updated_by = $8
-       WHERE id = $9 AND institution_id = $10 RETURNING *`,
+         specialization = COALESCE($5, specialization), designation = COALESCE($6, designation),
+         max_weekly_hours = COALESCE($7, max_weekly_hours), current_hours = COALESCE($8, current_hours),
+         active = COALESCE($9, active), updated_by = $10
+       WHERE id = $11 AND institution_id = $12 RETURNING *`,
       [fullName?.trim()??null, email?.trim()??null, phone?.trim()??null,
-       departmentId??null, specialization?.trim()??null, maxWeeklyHours??null,
+       departmentId??null, specialization?.trim()??null, designation?.trim()??null,
+       maxWeeklyHours??null, currentHours !== undefined ? Number(currentHours) : null,
        active??null, req.user.id, req.params.id, req.user.institution_id],
     );
-    await auditLog({ userId: req.user.id, action: 'UPDATE', module: 'Faculty', entity: result.rows[0].full_name, entityId: req.params.id, before: before.rows[0], after: result.rows[0] });
-    return res.json(result.rows[0]);
-  } catch (err) { next(err); }
+    if (departmentIds !== undefined || subjectIds !== undefined) {
+      await replaceFacultyAssignments(client, req.user.institution_id, req.params.id,
+        departmentIds ?? (departmentId ? [departmentId] : []), subjectIds ?? [], req.user.id);
+    }
+    await client.query('COMMIT');
+    const saved = await pool.query('SELECT * FROM faculty WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
+    await auditLog({ userId: req.user.id, action: 'UPDATE', module: 'Faculty', entity: saved.rows[0].full_name, entityId: req.params.id, before: before.rows[0], after: saved.rows[0] });
+    return res.json(saved.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    next(err);
+  } finally {
+    client.release();
+  }
 });
 
 router.delete('/:id', requireRole('SUPER_ADMIN', 'HOD'), async (req, res, next) => {
