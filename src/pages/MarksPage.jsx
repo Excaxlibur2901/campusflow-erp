@@ -124,7 +124,7 @@ export default function MarksPage() {
       const headers = { Authorization: `Bearer ${token}` };
 
       const [stuRes, markRes] = await Promise.all([
-        fetch(`/api/students?dept=${selectedDept}&limit=200`, { headers }),
+        fetch(`/api/students?dept=${selectedDept}&semester=${selectedSem}&limit=200`, { headers }),
         selectedComponent ? fetch(`/api/marks?componentId=${selectedComponent.id}`, { headers }) : Promise.resolve(null),
       ]);
 
@@ -155,7 +155,7 @@ export default function MarksPage() {
     } catch {
       // Best effort load
     }
-  }, [getAccessToken, selectedDept, selectedSubject, selectedComponent]);
+  }, [getAccessToken, selectedDept, selectedSem, selectedSubject, selectedComponent]);
 
   useEffect(() => {
     loadStudentsAndMarks();

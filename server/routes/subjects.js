@@ -12,19 +12,28 @@ router.use(authenticateUser);
 
 router.get('/', async (req, res, next) => {
   try {
-    const { dept, search } = req.query;
+    const { dept, search, semester } = req.query;
     const conds = [];
     const params = [];
     let idx = 1;
     conds.push(`d.institution_id = $${idx++}`);
     params.push(req.user.institution_id);
     if (dept) { conds.push(`d.code = $${idx++}`); params.push(dept); }
+    if (semester) {
+      conds.push(`(s.semester = $${idx} OR sem.number = $${idx})`);
+      params.push(Number(semester));
+      idx++;
+    }
     if (search) { conds.push(`(s.name ILIKE $${idx} OR s.code ILIKE $${idx})`); params.push(`%${search}%`); idx++; }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT s.*, d.code AS dept_code, d.name AS dept_name
+      `SELECT s.*, d.code AS dept_code, d.name AS dept_name,
+              f.id AS faculty_id, f.full_name AS faculty_name, f.employee_code AS faculty_code,
+              COALESCE(s.semester, sem.number, 3) AS semester
        FROM subjects s
        INNER JOIN departments d ON d.id = s.department_id
+       LEFT JOIN faculty f ON f.id = s.faculty_id
+       LEFT JOIN semesters sem ON sem.id = s.semester_id
        ${where}
        ORDER BY d.code, s.code`,
       params,
@@ -35,7 +44,7 @@ router.get('/', async (req, res, next) => {
 
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const { code, name, subjectType, credits, weeklyHours, departmentId } = req.body;
+    const { code, name, subjectType, credits, weeklyHours, departmentId, facultyId, semester } = req.body;
     if (!code?.trim()) return res.status(400).json({ error: 'Subject code is required.' });
     if (!name?.trim()) return res.status(400).json({ error: 'Subject name is required.' });
 
@@ -43,10 +52,11 @@ router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res
     if (deptCheck.rowCount === 0) return res.status(404).json({ error: 'Department not found.' });
 
     const result = await pool.query(
-      `INSERT INTO subjects (department_id, code, name, subject_type, credits, weekly_hours, created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$7) RETURNING *`,
+      `INSERT INTO subjects (department_id, code, name, subject_type, credits, weekly_hours, faculty_id, semester, created_by, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) RETURNING *`,
       [departmentId ?? null, code.trim().toUpperCase(), name.trim(),
-       subjectType ?? 'theory', credits ?? 0, weeklyHours ?? 0, req.user.id],
+       subjectType ?? 'theory', credits ?? 0, weeklyHours ?? 0,
+       facultyId ?? null, semester ? Number(semester) : 3, req.user.id],
     );
     await auditLog({ userId: req.user.id, action: 'CREATE', module: 'Subjects', entity: name.trim(), entityId: result.rows[0].id });
     return res.status(201).json(result.rows[0]);
@@ -64,16 +74,20 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
       WHERE s.id = $1 AND d.institution_id = $2
     `, [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Subject not found.' });
-    const { code, name, subjectType, credits, weeklyHours, active } = req.body;
+    const { code, name, subjectType, credits, weeklyHours, active, facultyId, semester } = req.body;
     const result = await pool.query(
       `UPDATE subjects SET
          code = COALESCE($1, code), name = COALESCE($2, name),
          subject_type = COALESCE($3, subject_type), credits = COALESCE($4, credits),
          weekly_hours = COALESCE($5, weekly_hours), active = COALESCE($6, active),
-         updated_by = $7
-       WHERE id = $8 RETURNING *`,
+         faculty_id = COALESCE($7, faculty_id), semester = COALESCE($8, semester),
+         updated_by = $9
+       WHERE id = $10 RETURNING *`,
       [code?.trim()?.toUpperCase()??null, name?.trim()??null, subjectType??null,
-       credits??null, weeklyHours??null, active??null, req.user.id, req.params.id],
+       credits??null, weeklyHours??null, active??null,
+       facultyId !== undefined ? facultyId : null,
+       semester !== undefined ? Number(semester) : null,
+       req.user.id, req.params.id],
     );
     await auditLog({ userId: req.user.id, action: 'UPDATE', module: 'Subjects', entity: result.rows[0].name, entityId: req.params.id, before: before.rows[0], after: result.rows[0] });
     return res.json(result.rows[0]);

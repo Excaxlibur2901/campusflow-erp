@@ -76,6 +76,14 @@ export default function TimetablePage() {
     loadTimetable();
   }, [loadTimetable]);
 
+  // A timetable/report belongs to the selected department, semester, and
+  // section. Do not leave the previous semester's generation result visible
+  // while the newly selected context is loading.
+  useEffect(() => {
+    setGenReport(null);
+    setErrorMsg('');
+  }, [selectedDept, selectedSem, selectedSection]);
+
   const contextMatches = useCallback((slot) => (
     slot.section === selectedSection
     && (!slot.dept || slot.dept === selectedDept)
@@ -128,8 +136,12 @@ export default function TimetablePage() {
           await loadTimetable();
         }
       } else {
-        const err = await res.json();
-        setErrorMsg(err.error || 'Failed to generate timetable.');
+        const err = await res.json().catch(() => ({}));
+        // 409 responses contain the engine report (including the exact
+        // subject/resource conflict). Preserve it instead of hiding it behind
+        // the generic error banner.
+        if (err.report) setGenReport(err.report);
+        setErrorMsg(err.error || err.report?.error || 'Failed to generate timetable.');
         showToast('Timetable generation failed', 'error');
       }
     } catch {

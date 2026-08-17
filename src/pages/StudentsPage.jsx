@@ -134,6 +134,7 @@ export default function StudentsPage() {
             phone: form.phone,
             departmentId,
             year: Number(form.year),
+            semester: Number(form.semester),
             division: form.section,
           }),
         });
@@ -154,6 +155,7 @@ export default function StudentsPage() {
             phone: form.phone,
             departmentId,
             year: Number(form.year),
+            semester: Number(form.semester),
             division: form.section,
           }),
         });

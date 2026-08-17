@@ -19,7 +19,7 @@ router.use(authenticateUser);
 /* ── GET /api/students ─────────────────────────────────────────── */
 router.get('/', async (req, res, next) => {
   try {
-    const { dept, section, status, search, page = '1', limit = '50' } = req.query;
+    const { dept, section, semester, status, search, page = '1', limit = '50' } = req.query;
     const pageNum = Math.max(1, parseInt(page, 10));
     const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10)));
     const offset = (pageNum - 1) * limitNum;
@@ -33,6 +33,11 @@ router.get('/', async (req, res, next) => {
 
     if (dept) { conditions.push(`d.code = $${idx++}`); params.push(dept); }
     if (section) { conditions.push(`sec.code = $${idx++}`); params.push(section); }
+    if (semester) {
+      conditions.push(`(s.semester = $${idx} OR sem.number = $${idx})`);
+      params.push(Number(semester));
+      idx++;
+    }
     if (status) { conditions.push(`s.status = $${idx++}`); params.push(status.toUpperCase()); }
     if (search) {
       conditions.push(`(s.full_name ILIKE $${idx} OR s.roll_number ILIKE $${idx} OR s.enrollment_number ILIKE $${idx})`);
@@ -45,6 +50,7 @@ router.get('/', async (req, res, next) => {
       `SELECT COUNT(*)::int FROM students s
        LEFT JOIN departments d ON d.id = s.department_id
        LEFT JOIN sections sec ON sec.id = s.section_id
+       LEFT JOIN semesters sem ON (sem.id = sec.semester_id OR sem.id = s.semester_id)
        ${where}`,
       params,
     );
@@ -54,11 +60,15 @@ router.get('/', async (req, res, next) => {
               d.code AS dept_code, d.name AS dept_name,
               dep.code AS dept,
               sec.code AS section,
+              COALESCE(s.semester, sem.number, 3) AS semester,
+              COALESCE(s.year, 2) AS year,
+              COALESCE(s.division, sec.code, 'A') AS division,
               s.created_at, s.updated_at
        FROM students s
        LEFT JOIN departments d ON d.id = s.department_id
        LEFT JOIN departments dep ON dep.id = s.department_id
        LEFT JOIN sections sec ON sec.id = s.section_id
+       LEFT JOIN semesters sem ON (sem.id = sec.semester_id OR sem.id = s.semester_id)
        ${where}
        ORDER BY s.roll_number
        LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -77,19 +87,20 @@ router.get('/', async (req, res, next) => {
 /* ── POST /api/students ─────────────────────────────────────────── */
 router.post('/', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId } = req.body;
+    const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId, semester, year, division } = req.body;
 
     if (!rollNumber?.trim()) return res.status(400).json({ error: 'Roll number is required.' });
     if (!fullName?.trim())   return res.status(400).json({ error: 'Full name is required.' });
 
     const result = await pool.query(
       `INSERT INTO students
-         (institution_id, department_id, section_id, roll_number, enrollment_number, full_name, email, phone, created_by, updated_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+         (institution_id, department_id, section_id, roll_number, enrollment_number, full_name, email, phone, semester, year, division, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
        RETURNING *`,
       [req.user.institution_id, departmentId ?? null, sectionId ?? null,
        rollNumber.trim(), enrollmentNumber?.trim() ?? null,
        fullName.trim(), email?.trim() ?? null, phone?.trim() ?? null,
+       semester ? Number(semester) : 3, year ? Number(year) : 2, division?.trim() ?? null,
        req.user.id],
     );
     await auditLog({ userId: req.user.id, action: 'CREATE', module: 'Students', entity: fullName.trim(), entityId: result.rows[0].id });
@@ -106,7 +117,7 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
     const before = await pool.query('SELECT * FROM students WHERE id = $1 AND institution_id = $2', [req.params.id, req.user.institution_id]);
     if (before.rowCount === 0) return res.status(404).json({ error: 'Student not found.' });
 
-    const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId, status } = req.body;
+    const { rollNumber, enrollmentNumber, fullName, email, phone, departmentId, sectionId, status, semester, year, division } = req.body;
     const result = await pool.query(
       `UPDATE students SET
          roll_number        = COALESCE($1, roll_number),
@@ -117,12 +128,18 @@ router.put('/:id', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, r
          department_id      = COALESCE($6, department_id),
          section_id         = COALESCE($7, section_id),
          status             = COALESCE($8, status),
-         updated_by         = $9
-       WHERE id = $10 AND institution_id = $11
+         semester           = COALESCE($9, semester),
+         year               = COALESCE($10, year),
+         division           = COALESCE($11, division),
+         updated_by         = $12
+       WHERE id = $13 AND institution_id = $14
        RETURNING *`,
       [rollNumber?.trim() ?? null, enrollmentNumber?.trim() ?? null,
        fullName?.trim() ?? null, email?.trim() ?? null, phone?.trim() ?? null,
        departmentId ?? null, sectionId ?? null, status ?? null,
+       semester !== undefined ? Number(semester) : null,
+       year !== undefined ? Number(year) : null,
+       division?.trim() ?? null,
        req.user.id, req.params.id, req.user.institution_id],
     );
     await auditLog({
