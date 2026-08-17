@@ -263,13 +263,14 @@ export default function SubjectsPage() {
                     {departments.map(d => <option key={d.id} value={d.code}>{d.code}</option>)}
                   </select>
                 </div>
-                <div className="form-group"><label className="form-label">Assigned Faculty</label>
+                <div className="form-group"><label className="form-label">Assign Faculty</label>
                   <select className="form-select" value={form.facultyId} onChange={e => setForm({ ...form, facultyId: e.target.value })}>
                     <option value="">-- Unassigned --</option>
-                    {facultyList.filter(f => !form.dept || f.dept === form.dept || f.dept === 'All' || !f.dept).map(f => (
-                      <option key={f.id} value={f.id}>{f.name} {f.dept ? `(${f.dept})` : ''}</option>
+                    {facultyList.map(f => (
+                      <option key={f.id} value={f.id}>{f.name} {f.dept ? `(${f.dept})` : '(All branches)'}</option>
                     ))}
                   </select>
+                  <small style={{ color: 'var(--text-muted)' }}>Faculty can be assigned across branches.</small>
                 </div>
                 <div className="form-group"><label className="form-label">Type</label><select className="form-select" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}><option value="theory">Theory</option><option value="lab">Lab</option></select></div>
                 <div className="form-group"><label className="form-label">Credits</label><input className="form-input" type="number" value={form.credits} onChange={e => setForm({ ...form, credits: e.target.value })} /></div>
