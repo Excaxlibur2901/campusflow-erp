@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useState, useEffect } from 'react';
+import { useCallback, useMemo, useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { days, timeSlots } from '../data/mockData';
 import { downloadOfficialFile } from '../utils/officialDownloads';
@@ -24,6 +24,8 @@ const tabs = [
   { id: 'faculty', label: 'Faculty View' },
   { id: 'classroom', label: 'Classroom View' },
 ];
+
+const timetableBranches = ['IT', 'AIML', 'CO', 'EC'];
 
 const formatFacultyName = (name = '') => {
   const parts = name.split(' ').filter(Boolean);
@@ -61,7 +63,9 @@ export default function TimetablePage() {
       const headers = { Authorization: `Bearer ${token}` };
 
       const [ttRes, deptRes] = await Promise.all([
-        fetch(`/api/timetable?dept=${selectedDept}&semester=${selectedSem}&section=${selectedSection}`, { headers }),
+        // Load every branch for the selected semester so the admin view can
+        // display branch-specific schedules and expose cross-branch clashes.
+        fetch(`/api/timetable?semester=${selectedSem}`, { headers }),
         fetch('/api/departments', { headers }),
       ]);
 
@@ -70,7 +74,7 @@ export default function TimetablePage() {
     } catch {
       // Best effort load
     }
-  }, [getAccessToken, selectedDept, selectedSem, selectedSection]);
+  }, [getAccessToken, selectedSem]);
 
   useEffect(() => {
     loadTimetable();
@@ -85,23 +89,31 @@ export default function TimetablePage() {
   }, [selectedDept, selectedSem, selectedSection]);
 
   const contextMatches = useCallback((slot) => (
-    slot.section === selectedSection
-    && (!slot.dept || slot.dept === selectedDept)
-    && (!slot.semester || String(slot.semester) === String(selectedSem))
-  ), [selectedDept, selectedSection, selectedSem]);
+    (!slot.semester || String(slot.semester) === String(selectedSem))
+  ), [selectedSem]);
 
   const scopedSlots = useMemo(
     () => timetableSlots.filter(contextMatches),
     [timetableSlots, contextMatches],
   );
 
+  const branchGroups = useMemo(() => timetableBranches.map((branch) => ({
+    branch,
+    slots: scopedSlots.filter((slot) => slot.dept === branch),
+  })), [scopedSlots]);
+
   const totalTeachingSlots = days.length * timeSlots.length;
   const filledCount = scopedSlots.length;
   const lockedCount = scopedSlots.filter((slot) => slot.locked).length;
 
   const getSlot = useCallback(
-    (day, slotIdx) => scopedSlots.find((slot) => slot.day === day && (slot.slot === slotIdx || slot.slotIdx === slotIdx)),
-    [scopedSlots],
+    (day, slotIdx, branch = selectedDept) => scopedSlots.find((slot) => (
+      slot.dept === branch
+      && slot.section === selectedSection
+      && slot.day === day
+      && (slot.slot === slotIdx || slot.slotIdx === slotIdx)
+    )),
+    [scopedSlots, selectedDept, selectedSection],
   );
 
   // Backend Generate API Call
@@ -317,56 +329,67 @@ export default function TimetablePage() {
       <div className="tabs">{tabs.map((t) => (<button key={t.id} className={`tab ${activeTab === t.id ? 'active' : ''}`} onClick={() => setActiveTab(t.id)}>{t.label}</button>))}</div>
 
       {activeTab === 'admin' && (
-        <div className="table-container">
-          <table style={{ tableLayout: 'fixed' }}>
-            <thead>
-              <tr>
-                <th style={{ width: 80 }}>Day</th>
-                {timeSlots.map((slot, i) => (
-                  <Fragment key={slot}>
-                    {i === lunchAfterSlot && <th style={{ width: 60, background: 'var(--surface-light)', textAlign: 'center' }}>Lunch</th>}
-                    <th style={{ textAlign: 'center', fontSize: 12 }}><Clock size={12} style={{ display: 'inline', marginRight: 4 }} />{slot}</th>
-                  </Fragment>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {days.map((day) => (
-                <tr key={day}>
-                  <td style={{ fontWeight: 700, fontSize: 13 }}>{day}</td>
-                  {timeSlots.map((_, slotIdx) => {
-                    const slot = getSlot(day, slotIdx);
-                    return (
-                      <Fragment key={slotIdx}>
-                        {slotIdx === lunchAfterSlot && <td style={{ background: 'var(--surface-light)', textAlign: 'center', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>BREAK</td>}
-                        <td style={{ padding: 4, height: 72, verticalAlign: 'top', position: 'relative' }}>
-                          {slot ? (
-                            <div style={{ background: slot.locked ? 'rgba(59, 130, 246, 0.12)' : 'var(--surface-light)', border: `1px solid ${slot.locked ? 'var(--primary)' : 'var(--border)'}`, borderRadius: 6, padding: 6, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', fontSize: 11, position: 'relative' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ fontWeight: 800, color: 'var(--primary)' }}>{slot.subject}</span>
-                                <div style={{ display: 'flex', gap: 2 }}>
-                                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 1 }} onClick={() => toggleLock(slot.id, slot.locked)} title={slot.locked ? 'Unlock' : 'Lock'}>
-                                    {slot.locked ? <Lock size={12} color="var(--primary)" /> : <Unlock size={12} color="var(--text-muted)" />}
-                                  </button>
-                                  <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 1, color: 'var(--error)' }} onClick={() => clearSlot(slot.id, slot.locked)} title="Clear">
-                                    <Trash2 size={12} />
-                                  </button>
+        <div style={{ display: 'grid', gap: 24 }}>
+          {branchGroups.map(({ branch, slots: branchSlots }) => (
+            <section key={branch} className="table-container" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface-light)' }}>
+                <div style={{ fontWeight: 800, fontSize: 15 }}>The Shirpur Education Society's R. C. Patel College of Engineering and Polytechnic, Shirpur</div>
+                <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 13 }}>Branch: {branch} &nbsp;•&nbsp; Semester: {selectedSem} &nbsp;•&nbsp; Section: {selectedSection}</div>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ minWidth: 760, tableLayout: 'fixed' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 118 }}>Time Slot</th>
+                      {days.map((day) => <th key={day} style={{ textAlign: 'center', fontSize: 12 }}>{day}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {timeSlots.map((timeSlot, slotIdx) => (
+                      <tr key={timeSlot}>
+                        <th style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          <Clock size={12} style={{ display: 'inline', marginRight: 4 }} />{timeSlot}
+                        </th>
+                        {days.map((day) => {
+                          const slot = branchSlots.find((candidate) => (
+                            candidate.section === selectedSection
+                            && candidate.day === day
+                            && (candidate.slot === slotIdx || candidate.slotIdx === slotIdx)
+                          ));
+                          const isLunch = slotIdx === lunchAfterSlot;
+                          return (
+                            <td key={`${day}-${slotIdx}`} style={{ padding: 4, height: 76, verticalAlign: 'top' }}>
+                              {isLunch ? (
+                                <div style={{ height: '100%', minHeight: 64, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--surface-light)', color: 'var(--text-muted)', fontSize: 11, fontWeight: 700 }}>BREAK</div>
+                              ) : slot ? (
+                                <div style={{ background: slot.locked ? 'rgba(59, 130, 246, 0.12)' : 'var(--surface-light)', border: `1px solid ${slot.locked ? 'var(--primary)' : 'var(--border)'}`, borderRadius: 6, padding: 6, minHeight: 64, fontSize: 11 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
+                                    <span style={{ fontWeight: 800, color: 'var(--primary)' }}>{slot.subject}</span>
+                                    <span style={{ display: 'flex', gap: 2 }}>
+                                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 1 }} onClick={() => toggleLock(slot.id, slot.locked)} title={slot.locked ? 'Unlock' : 'Lock'}>
+                                        {slot.locked ? <Lock size={12} color="var(--primary)" /> : <Unlock size={12} color="var(--text-muted)" />}
+                                      </button>
+                                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 1, color: 'var(--error)' }} onClick={() => clearSlot(slot.id, slot.locked)} title="Clear">
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </span>
+                                  </div>
+                                  <div style={{ marginTop: 6, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{formatFacultyName(slot.faculty)}</div>
+                                  <div style={{ marginTop: 3, fontWeight: 700, color: 'var(--accent)' }}>{slot.room}</div>
                                 </div>
-                              </div>
-                              <div style={{ fontSize: 10, color: 'var(--text-muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{formatFacultyName(slot.faculty)}</div>
-                              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)' }}>{slot.room}</div>
-                            </div>
-                          ) : (
-                            <div style={{ height: '100%', border: '1px dashed var(--border)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: 'var(--text-muted)' }}>—</div>
-                          )}
-                        </td>
-                      </Fragment>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                              ) : (
+                                <div style={{ height: '100%', minHeight: 64, border: '1px dashed var(--border)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>—</div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ))}
         </div>
       )}
     </div>

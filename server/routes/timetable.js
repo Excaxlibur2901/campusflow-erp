@@ -88,7 +88,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
     } = req.body;
 
     // 1. Fetch PostgreSQL Subjects, Faculty, Classrooms for department/institution
-    const [subRes, facRes, roomRes, secRes, semesterRes, existingRes] = await Promise.all([
+    const [subRes, facRes, roomRes, secRes, existingRes] = await Promise.all([
       pool.query(
         `SELECT s.id, s.code, s.name, s.subject_type, s.credits, s.weekly_hours, s.faculty_id,
                 ARRAY_AGG(DISTINCT fsa.faculty_id) FILTER (WHERE fsa.faculty_id IS NOT NULL) AS assigned_faculty_ids
@@ -124,17 +124,9 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
         [req.user.institution_id, dept, sectionCode, Number(semester)],
       ),
       pool.query(
-        `SELECT sem.id
-         FROM semesters sem
-         JOIN programs p ON p.id = sem.program_id
-         JOIN departments d ON d.id = p.department_id
-         WHERE d.institution_id = $1 AND d.code = $2 AND sem.number = $3
-         LIMIT 1`,
-        [req.user.institution_id, dept, Number(semester)],
-      ),
-      pool.query(
         `SELECT te.id, te.locked,
                 ts.label AS time_slot_label,
+                d.code AS dept_code,
                 sec.code AS section_code,
                 s.id AS subject_id, s.code AS subject_code,
                 f.id AS faculty_id, f.full_name AS faculty_name,
@@ -210,30 +202,13 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       });
     }
 
-    if (secRes.rowCount === 0 && semesterRes.rowCount === 0) {
-      const message = `Semester ${Number(semester)} is not configured for department ${dept}.`;
-      const report = {
-        ok: false,
-        error: message,
-        totalSlotsGenerated: 0,
-        hardConflicts: [{ type: 'SEMESTER_NOT_CONFIGURED', message }],
-        hardConflictCount: 1,
-        softViolations: [],
-        softViolationCount: 0,
-        unscheduledHours: [],
-        unscheduledCount: 0,
-        facultyWorkload: [],
-        roomUtilization: [],
-        score: 0,
-      };
-      return res.status(409).json({ slots: [], hardConflicts: report.hardConflicts, report });
-    }
-
     const existingSlots = existingRes.rows.map(r => ({
       id: r.id,
       day: r.time_slot_label?.split('-')[0] || 'Mon',
       slotIdx: Number(r.time_slot_label?.split('-')[1]) || 0,
-      sectionCode: r.section_code,
+      // Section codes repeat across branches; include the branch in the
+      // engine key so cross-branch faculty and room clashes are not missed.
+      sectionCode: `${r.dept_code}:${r.section_code}`,
       subjectId: r.subject_id,
       facultyId: r.faculty_id,
       roomId: r.room_id,
@@ -250,7 +225,7 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       facultyList: facRes.rows,
       classroomsList: roomRes.rows,
       existingSlots,
-      sectionCode,
+      sectionCode: `${dept}:${sectionCode}`,
       sectionCapacity,
     });
 
@@ -260,7 +235,9 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
       try {
         await client.query('BEGIN');
 
-        // Fetch or create section_id for the department and semester
+        // Fetch or create section_id for the department and semester. Legacy
+        // subjects store the semester number directly, so provision the
+        // normalized academic structure when it does not exist yet.
         let sectionId = secRes.rows[0]?.id;
         if (!sectionId) {
           let semRes = await client.query(`
@@ -269,6 +246,43 @@ router.post('/generate', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (
             JOIN departments d ON d.id = p.department_id
             WHERE d.institution_id = $1 AND d.code = $2 AND sem.number = $3 LIMIT 1
           `, [req.user.institution_id, dept, Number(semester)]);
+
+          if (semRes.rowCount === 0) {
+            const deptRes = await client.query(
+              `SELECT id FROM departments WHERE institution_id = $1 AND code = $2 LIMIT 1`,
+              [req.user.institution_id, dept],
+            );
+            if (deptRes.rowCount === 0) {
+              throw Object.assign(new Error(`Department ${dept} is not configured.`), { code: 'DEPARTMENT_NOT_FOUND' });
+            }
+
+            let programRes = await client.query(
+              `SELECT id FROM programs WHERE department_id = $1 ORDER BY created_at LIMIT 1`,
+              [deptRes.rows[0].id],
+            );
+            if (programRes.rowCount === 0) {
+              programRes = await client.query(
+                `INSERT INTO programs (department_id, code, name, duration_years)
+                 VALUES ($1, $2, $3, 4) RETURNING id`,
+                [deptRes.rows[0].id, `${dept}-DEFAULT`, `${dept} Program`],
+              );
+            }
+
+            const createdSemester = await client.query(
+              `INSERT INTO semesters (program_id, number)
+               VALUES ($1, $2)
+               ON CONFLICT DO NOTHING
+               RETURNING id`,
+              [programRes.rows[0].id, Number(semester)],
+            );
+            semRes = createdSemester.rowCount > 0
+              ? createdSemester
+              : await client.query(
+                `SELECT id FROM semesters WHERE program_id = $1 AND number = $2
+                 ORDER BY created_at LIMIT 1`,
+                [programRes.rows[0].id, Number(semester)],
+              );
+          }
 
           if (semRes.rowCount > 0) {
             const newSec = await client.query(
