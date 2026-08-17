@@ -166,7 +166,7 @@ router.delete('/:id', requireRole('SUPER_ADMIN', 'HOD'), async (req, res, next) 
 /* ── POST /api/students/import ──────────────────────────────────── */
 router.post('/import', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (req, res, next) => {
   try {
-    const { students, institutionId } = req.body;
+    const targetInstitutionId = req.user.institution_id;
     if (!Array.isArray(students) || students.length === 0) {
       return res.status(400).json({ error: 'No student records provided.' });
     }
@@ -191,7 +191,7 @@ router.post('/import', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (re
       for (const s of students) {
         const existing = await client.query(
           `SELECT id FROM students WHERE institution_id = $1 AND roll_number = $2`,
-          [institutionId ?? null, s.rollNumber.trim()],
+          [targetInstitutionId, s.rollNumber.trim()],
         );
         if (existing.rowCount > 0) { skipped++; continue; }
 
@@ -199,7 +199,7 @@ router.post('/import', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD'), async (re
           `INSERT INTO students
              (institution_id, department_id, section_id, roll_number, enrollment_number, full_name, email, phone, created_by, updated_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)`,
-          [institutionId ?? null, s.departmentId ?? null, s.sectionId ?? null,
+          [targetInstitutionId, s.departmentId ?? null, s.sectionId ?? null,
            s.rollNumber.trim(), s.enrollmentNumber?.trim() ?? null,
            s.fullName.trim(), s.email?.trim() ?? null, s.phone?.trim() ?? null,
            req.user.id],

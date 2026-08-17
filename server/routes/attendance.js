@@ -72,7 +72,8 @@ router.get('/sessions', async (req, res, next) => {
     if (status)    { conds.push(`s.status = $${idx++}`); params.push(status); }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
     const result = await pool.query(
-      `SELECT s.*, COUNT(ar.id)::int AS record_count,
+      `SELECT s.*, sub.code AS subject_code, sub.name AS subject_name,
+              COUNT(ar.id)::int AS record_count,
               COUNT(ar.id) FILTER (WHERE ar.status = 'present')::int AS present_count
        FROM attendance_sessions s
        LEFT JOIN attendance_records ar ON ar.attendance_session_id = s.id
@@ -80,7 +81,7 @@ router.get('/sessions', async (req, res, next) => {
        LEFT JOIN subjects sub ON sub.id = so.subject_id
        LEFT JOIN departments d ON d.id = sub.department_id
        ${where}
-       GROUP BY s.id
+       GROUP BY s.id, sub.code, sub.name
        ORDER BY s.session_date DESC, s.created_at DESC
        LIMIT $${idx} OFFSET $${idx+1}`,
       [...params, limitNum, offset],
@@ -182,7 +183,7 @@ router.get('/students/:studentId/percentage', async (req, res, next) => {
         FROM attendance_records ar
         INNER JOIN students st ON st.id = ar.student_id
         WHERE ar.student_id = $1 AND st.institution_id = $2`,
-      [req.params.studentId],
+      [req.params.studentId, req.user.institution_id],
     );
     return res.json(result.rows[0] ?? { total_classes: 0, present_count: 0, absent_count: 0, percentage: 0 });
   } catch (err) { next(err); }
@@ -209,7 +210,7 @@ router.get('/defaulters', requireRole('SUPER_ADMIN', 'PRINCIPAL', 'HOD', 'FACULT
        WHERE s.status = 'ACTIVE' AND s.institution_id = $1
        GROUP BY s.id, d.code, sec.code
        HAVING COUNT(ar.id) > 0 AND
-              ROUND((COUNT(ar.id) FILTER (WHERE ar.status = 'present')::numeric / COUNT(ar.id)) * 100, 2) < $1
+              ROUND((COUNT(ar.id) FILTER (WHERE ar.status = 'present')::numeric / COUNT(ar.id)) * 100, 2) < $2
        ORDER BY percentage ASC`,
       [req.user.institution_id, threshold],
     );

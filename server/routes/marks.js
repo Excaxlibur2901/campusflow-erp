@@ -190,7 +190,7 @@ router.get('/', async (req, res, next) => {
     let idx = 2;
 
     if (componentId) { conds.push(`m.mark_component_id = $${idx++}`); params.push(componentId); }
-    if (subjectId)   { conds.push(`mc.subject_id = $${idx++}`); params.push(subjectId); }
+    if (subjectId)   { conds.push(`(mc.subject_id = $${idx} OR so.subject_id = $${idx})`); params.push(subjectId); idx++; }
 
     const where = `WHERE ${conds.join(' AND ')}`;
 
@@ -199,6 +199,7 @@ router.get('/', async (req, res, next) => {
               mc.name AS component_name, mc.max_marks, mc.weight, mc.locked AS component_locked
        FROM marks m
        JOIN mark_components mc ON mc.id = m.mark_component_id
+       LEFT JOIN subject_offerings so ON so.id = mc.subject_offering_id
        JOIN students s ON s.id = m.student_id
        ${where}
        ORDER BY s.roll_number`,

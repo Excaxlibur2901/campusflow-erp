@@ -25,18 +25,16 @@ const tabs = [
   { id: 'classroom', label: 'Classroom View' },
 ];
 
-const timetableBranches = ['IT', 'AIML', 'CO', 'EC'];
-
 const formatFacultyName = (name = '') => {
   const parts = name.split(' ').filter(Boolean);
   return parts.length > 1 ? parts.slice(-2).join(' ') : name;
 };
 
 export default function TimetablePage() {
-  const { getAccessToken } = useAuth();
+  const { user, getAccessToken } = useAuth();
 
   const [activeTab, setActiveTab] = useState('admin');
-  const [selectedDept, setSelectedDept] = useState('CSE');
+  const [selectedDept, setSelectedDept] = useState('');
   const [selectedSem, setSelectedSem] = useState('3');
   const [selectedSection, setSelectedSection] = useState('A');
   const [effectiveFrom] = useState(new Date().toISOString().split('T')[0]);
@@ -63,14 +61,19 @@ export default function TimetablePage() {
       const headers = { Authorization: `Bearer ${token}` };
 
       const [ttRes, deptRes] = await Promise.all([
-        // Load every branch for the selected semester so the admin view can
-        // display branch-specific schedules and expose cross-branch clashes.
         fetch(`/api/timetable?semester=${selectedSem}`, { headers }),
         fetch('/api/departments', { headers }),
       ]);
 
       if (ttRes.ok) setTimetableSlots(await ttRes.json());
-      if (deptRes.ok) setDepartments(await deptRes.json());
+      if (deptRes.ok) {
+        const deptData = await deptRes.json();
+        setDepartments(deptData);
+        setSelectedDept((current) => {
+          if (current && deptData.some((d) => d.code === current)) return current;
+          return deptData[0]?.code || '';
+        });
+      }
     } catch {
       // Best effort load
     }
@@ -80,9 +83,7 @@ export default function TimetablePage() {
     loadTimetable();
   }, [loadTimetable]);
 
-  // A timetable/report belongs to the selected department, semester, and
-  // section. Do not leave the previous semester's generation result visible
-  // while the newly selected context is loading.
+  // Reset report and error banner on context change
   useEffect(() => {
     setGenReport(null);
     setErrorMsg('');
@@ -97,10 +98,11 @@ export default function TimetablePage() {
     [timetableSlots, contextMatches],
   );
 
-  const branchGroups = useMemo(() => timetableBranches.map((branch) => ({
-    branch,
-    slots: scopedSlots.filter((slot) => slot.dept === branch),
-  })), [scopedSlots]);
+  const branchGroups = useMemo(() => departments.map((d) => ({
+    branch: d.code,
+    branchName: d.name,
+    slots: scopedSlots.filter((slot) => slot.dept === d.code),
+  })), [departments, scopedSlots]);
 
   const totalTeachingSlots = days.length * timeSlots.length;
   const filledCount = scopedSlots.length;
@@ -118,6 +120,12 @@ export default function TimetablePage() {
 
   // Backend Generate API Call
   const handleGenerate = async () => {
+    const targetDept = selectedDept || departments[0]?.code;
+    if (!targetDept) {
+      setErrorMsg('No department available to generate timetable.');
+      return;
+    }
+
     setGenerating(true);
     setGenReport(null);
     setErrorMsg('');
@@ -128,7 +136,7 @@ export default function TimetablePage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          dept: selectedDept,
+          dept: targetDept,
           semester: Number(selectedSem),
           sectionCode: selectedSection,
           days,
@@ -149,9 +157,6 @@ export default function TimetablePage() {
         }
       } else {
         const err = await res.json().catch(() => ({}));
-        // 409 responses contain the engine report (including the exact
-        // subject/resource conflict). Preserve it instead of hiding it behind
-        // the generic error banner.
         if (err.report) setGenReport(err.report);
         setErrorMsg(err.error || err.report?.error || 'Failed to generate timetable.');
         showToast('Timetable generation failed', 'error');
@@ -205,11 +210,11 @@ export default function TimetablePage() {
   const handleDownload = async (format, title) => {
     try {
       await downloadOfficialFile(format, {
-        settings: { institutionName: 'CampusFlow ERP' },
+        settings: { institutionName: user?.institution_name || 'CampusFlow ERP' },
         title,
-        subtitle: `Department of ${selectedDept} - Sem ${selectedSem} (Sec ${selectedSection})`,
+        subtitle: `Department of ${selectedDept || 'All'} - Sem ${selectedSem} (Sec ${selectedSection})`,
         details: [
-          { label: 'Department', value: selectedDept },
+          { label: 'Department', value: selectedDept || 'All' },
           { label: 'Semester', value: `Semester ${selectedSem}` },
           { label: 'Section', value: selectedSection },
           { label: 'Effective From', value: effectiveFrom },
@@ -224,7 +229,7 @@ export default function TimetablePage() {
             return slot ? `${slot.subject} (${slot.room})` : '—';
           }),
         ]),
-        filename: `${selectedDept}_Sem${selectedSem}_Sec${selectedSection}_Timetable`,
+        filename: `${selectedDept || 'Dept'}_Sem${selectedSem}_Sec${selectedSection}_Timetable`,
       });
       showToast(`${title} exported as ${format.toUpperCase()}`);
     } catch {
@@ -247,7 +252,7 @@ export default function TimetablePage() {
             <p>Constraint-based timetable scheduling and resource optimization</p>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={generating}>
+            <button className="btn btn-primary btn-sm" onClick={handleGenerate} disabled={generating || departments.length === 0}>
               <Zap size={16} /> {generating ? 'Generating...' : 'Auto-Generate'}
             </button>
             <button className="btn btn-outline btn-sm" onClick={() => handleDownload('pdf', 'Official Timetable Schedule')}>
@@ -262,8 +267,9 @@ export default function TimetablePage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Building size={16} color="var(--text-muted)" />
             <label className="form-label" style={{ margin: 0 }}>Dept:</label>
-            <select className="form-select" style={{ width: 100 }} value={selectedDept} onChange={(e) => setSelectedDept(e.target.value)}>
-              {departments.map((d) => <option key={d.id} value={d.code}>{d.code}</option>)}
+            <select className="form-select" style={{ width: 140 }} value={selectedDept} onChange={(e) => setSelectedDept(e.target.value)}>
+              {departments.length === 0 && <option value="">Loading...</option>}
+              {departments.map((d) => <option key={d.id} value={d.code}>{d.code} - {d.name}</option>)}
             </select>
           </div>
 
@@ -330,10 +336,15 @@ export default function TimetablePage() {
 
       {activeTab === 'admin' && (
         <div style={{ display: 'grid', gap: 24 }}>
-          {branchGroups.map(({ branch, slots: branchSlots }) => (
+          {branchGroups.length === 0 && (
+            <div className="card" style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
+              No departments found for this institution. Please configure departments in Academic settings.
+            </div>
+          )}
+          {branchGroups.map(({ branch, branchName, slots: branchSlots }) => (
             <section key={branch} className="table-container" style={{ padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', background: 'var(--surface-light)' }}>
-                <div style={{ fontWeight: 800, fontSize: 15 }}>The Shirpur Education Society's R. C. Patel College of Engineering and Polytechnic, Shirpur</div>
+                <div style={{ fontWeight: 800, fontSize: 15 }}>Department of {branchName || branch} ({branch})</div>
                 <div style={{ marginTop: 4, color: 'var(--text-muted)', fontSize: 13 }}>Branch: {branch} &nbsp;•&nbsp; Semester: {selectedSem} &nbsp;•&nbsp; Section: {selectedSection}</div>
               </div>
               <div style={{ overflowX: 'auto' }}>

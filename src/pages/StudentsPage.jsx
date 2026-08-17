@@ -77,13 +77,14 @@ export default function StudentsPage() {
 
   const openAdd = () => {
     setEditingStu(null);
+    const defaultDept = departments.length > 0 ? departments[0].code : 'CSE';
     setForm({
       name: '',
-      rollNo: `CSE2024${String(studentsList.length + 1).padStart(3, '0')}`,
+      rollNo: `${defaultDept}2024${String(studentsList.length + 1).padStart(3, '0')}`,
       enrollmentNo: '',
       email: '',
       phone: '',
-      dept: departments.length > 0 ? departments[0].code : 'CSE',
+      dept: defaultDept,
       year: 2,
       semester: 3,
       section: 'A',

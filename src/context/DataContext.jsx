@@ -121,7 +121,7 @@ export function DataProvider({ children, getAccessToken }) {
         const history = (atts || []).map(a => ({
           id: a.id,
           date: a.session_date,
-          subject: a.subject_offering_id, // Best effort without API change
+          subject: a.subject_code || a.subject_name || a.subject_offering_id,
           total: a.record_count || 0,
           present: a.present_count || 0
         }));
